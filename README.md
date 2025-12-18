@@ -46,6 +46,24 @@ gox -osarch="darwin/amd64" -ldflags "-s -w" -gcflags="all=-trimpath=${PWD}" -asm
 gox -osarch="linux/amd64" -ldflags "-s -w" -gcflags="all=-trimpath=${PWD}" -asmflags="all=-trimpath=${PWD}"
 ```
 
+### docker 启动
+- 将编译好的文件放在与 Dockerfile 同目录
+- 构建镜像
+```
+docker build -t go-wxpush:v2 .
+```
+- 启动镜像，参数与命令行保持一致
+```
+docker run -d -p 5566:5566 --name go-wxpush0 go-wxpush:v2 \
+-port "5566"
+-title "测试标题" 
+-content "测试内容" 
+-appid "xxx" 
+-secret "xxx" 
+-userid "xxx-k08" 
+-template_id "xxx-Ks_PwGm--GSzllU"
+```
+
 ## 🗭 默认消息详情页
 
 服务启动成功后会自带消息详情页界面(即消息模板跳转的页面)，访问地址 `http://127.0.0.1:5566/detail` ，如有公网地址，可设置base_url参数为对应的host即可(无需加/detail)。
