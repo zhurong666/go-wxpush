@@ -1,42 +1,44 @@
-name: Download ARM64 Wheels for UOS
+name: Pack PyQt5 Environment for UOS
 
-on:
-  workflow_dispatch: # 手动触发
+on: [workflow_dispatch]
 
 jobs:
-  download-packages:
+  pack-conda-env:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
+      # 1. 设置 QEMU 模拟 ARM64
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v2
         with:
           platforms: linux/arm64
 
-      - name: Download Wheels in ARM64 Container
+      # 2. 在 ARM64 的 Conda 容器中打包
+      - name: Build and Pack in Container
         run: |
-          # 启动一个 ARM64 的 Python 3.11 (基于 Debian Buster) 容器
-          # 挂载当前目录到容器内，并在容器内执行 pip download
-          docker run --rm -v ${{ github.workspace }}:/work -w /work arm64v8/python:3.11-buster /bin/bash -c "
-            mkdir -p dist
-            echo '开始下载 PySide6 (兼容模式)...'
+          # 使用 Miniforge (原生支持 ARM64 + Conda-forge)
+          docker run --rm -v ${{ github.workspace }}:/work -w /work condaforge/miniforge3:latest /bin/bash -c "
             
-            # 这里我们利用 pip 的自动匹配，因为我们在 arm64 容器里，它绝对不会下错！
-            # 这里的 trick 是：PySide6 6.5.0 可能没有预编译包，我们尝试由 pip 自动寻找最佳版本
-            # 或者我们直接下载你之前想要的 PyQt6 (6.7.1)
+            echo '=== 1. 创建环境 (Python 3.11 + PyQt5) ==='
+            # 必须指定 pyqt=5，否则可能会装成 6
+            # conda-forge 的二进制包完美支持 ARM64
+            conda create -n uos_env python=3.11 pyqt=5.15 -y
             
-            pip download PyQt6==6.7.1 --dest dist --only-binary=:all:
-            pip download PyQt6-Qt6==6.7.2 --dest dist --only-binary=:all:
-            pip download PyQt6-sip==13.8.0 --dest dist --only-binary=:all:
+            echo '=== 2. 安装打包工具 ==='
+            conda install -n base -c conda-forge conda-pack -y
             
-            echo '下载完成，文件列表：'
-            ls -lh dist
+            echo '=== 3. 打包整个环境 ==='
+            # 这会将整个环境打包成一个单文件，解压即用
+            conda pack -n uos_env -o pyqt5_uos_arm64.tar.gz
+            
+            echo '=== 4. 修改权限 ==='
+            chmod 777 pyqt5_uos_arm64.tar.gz
           "
 
-      - name: Upload Artifacts
+      # 3. 上传结果
+      - name: Upload Environment
         uses: actions/upload-artifact@v4
         with:
-          name: arm64-wheels
-          path: dist/
+          name: pyqt5-offline-env
+          path: pyqt5_uos_arm64.tar.gz
