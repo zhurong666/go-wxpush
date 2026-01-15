@@ -1,0 +1,58 @@
+name: Build Lite Offline Environment (No Browser)
+
+on: workflow_dispatch
+
+jobs:
+  pack-env:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      # 1. 启用 ARM64 模拟器
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+        with:
+          platforms: linux/arm64
+
+      # 2. 使用 Miniforge 容器进行构建
+      - name: Create Portable Env
+        run: |
+          docker run --rm -v ${{ github.workspace }}:/work -w /work condaforge/miniforge3:latest /bin/bash -c "
+            
+            source /opt/conda/etc/profile.d/conda.sh
+            
+            echo '=== 1. 创建基础环境 (Conda 负责底层库) ==='
+            # 依然包含你所有需要的 Python 库
+            conda create -n uos_app python=3.11 \
+              pyqt=5.15 \
+              pandas \
+              openpyxl \
+              requests \
+              loguru \
+              pyinstaller \
+              -c conda-forge -y
+            
+            echo '=== 2. 激活环境 ==='
+            conda activate uos_app
+            
+            echo '=== 3. 安装 Playwright 1.56 Python 库 ==='
+            # 只装库，不下载浏览器
+            pip install playwright==1.56.0
+            
+            echo '=== 4. 安装打包工具 ==='
+            conda install -n base conda-pack -c conda-forge -y
+            
+            echo '=== 5. 开始打包 ==='
+            # 这个包会很小，纯 Python 环境
+            conda pack -n uos_app -o uos_lite_env.tar.gz
+            
+            echo '=== 6. 调整权限 ==='
+            chmod 777 uos_lite_env.tar.gz
+          "
+
+      # 3. 上传结果
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: uos-lite-env
+          path: uos_lite_env.tar.gz
