@@ -1,0 +1,65 @@
+name: Build ARM64 Env (Strict Mode)
+
+on: workflow_dispatch
+
+jobs:
+  pack-env:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      # 1. 启用 ARM64 模拟器 (核心步骤)
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+        with:
+          platforms: linux/arm64
+
+      # 2. 强制使用 ARM64 模式运行容器
+      - name: Create ARM64 Portable Env
+        run: |
+          # 关键修改：添加 --platform linux/arm64
+          # 这强迫 Docker 必须模拟 ARM64 环境，绝对不准用 x86！
+          docker run --rm --platform linux/arm64 -v ${{ github.workspace }}:/work -w /work condaforge/miniforge3:latest /bin/bash -c "
+            
+            # 初始化 conda
+            source /opt/conda/etc/profile.d/conda.sh
+            
+            echo '=== 1. 验证架构 (必须显示 aarch64) ==='
+            uname -m
+            if [ \"\$(uname -m)\" != \"aarch64\" ]; then
+              echo \"错误：当前不是 ARM64 环境！\"
+              exit 1
+            fi
+            
+            echo '=== 2. 创建环境 ==='
+            # 包含你要的所有库
+            conda create -n uos_app python=3.11 \
+              pyqt=5.15 \
+              pandas \
+              openpyxl \
+              requests \
+              loguru \
+              pyinstaller \
+              -c conda-forge -y
+            
+            echo '=== 3. 激活环境 ==='
+            conda activate uos_app
+            
+            echo '=== 4. 安装 Playwright (不带浏览器) ==='
+            pip install playwright==1.56.0
+            
+            echo '=== 5. 安装打包工具 ==='
+            conda install -n base conda-pack -c conda-forge -y
+            
+            echo '=== 6. 打包 ==='
+            conda pack -n uos_app -o uos_arm64_env.tar.gz
+            
+            chmod 777 uos_arm64_env.tar.gz
+          "
+
+      # 3. 上传结果
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: uos-arm64-env
+          path: uos_arm64_env.tar.gz
