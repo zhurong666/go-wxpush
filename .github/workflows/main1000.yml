@@ -1,0 +1,140 @@
+name: Build Ksnip ARM64 (Hybrid Safe Mode)
+
+on: workflow_dispatch
+
+jobs:
+  build-safe-tarball:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+        with:
+          platforms: linux/arm64
+
+      - name: Build and Package
+        run: |
+          docker run --rm --platform linux/arm64 \
+          -v ${{ github.workspace }}:/work \
+          ubuntu:22.04 /bin/bash -c "
+            
+            # === 1. 环境配置 (全套) ===
+            set -e
+            export DEBIAN_FRONTEND=noninteractive
+            export INSTALL_PREFIX=/usr
+            
+            echo '>>> [1/6] 安装依赖 (含自动查找工具)...'
+            apt-get update
+            # 关键工具：findutils (找文件), sed (改文件), squashfs-tools (解压工具)
+            apt-get install -y build-essential cmake git wget file grep findutils sed \
+                qtbase5-dev libqt5svg5-dev libqt5x11extras5-dev \
+                libxcb-xinerama0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+                libx11-dev zlib1g-dev \
+                qttools5-dev qttools5-dev-tools \
+                extra-cmake-modules \
+                squashfs-tools
+
+            mkdir -p /tmp/build_src
+            cd /tmp/build_src
+
+            # === 2. 编译 kColorPicker ===
+            echo '>>> [2/6] 编译 kColorPicker...'
+            git clone https://github.com/ksnip/kColorPicker.git
+            cd kColorPicker
+            mkdir build && cd build
+            cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=\$INSTALL_PREFIX -DBUILD_SHARED_LIBS=ON \
+                     -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF
+            make -j2
+            make install
+            cd ../..
+
+            # === 3. 编译 kImageAnnotator ===
+            echo '>>> [3/6] 编译 kImageAnnotator...'
+            git clone https://github.com/ksnip/kImageAnnotator.git
+            cd kImageAnnotator
+            mkdir build && cd build
+            cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=\$INSTALL_PREFIX -DBUILD_SHARED_LIBS=ON \
+                     -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF
+            make -j2
+            make install
+            cd ../..
+
+            # === 4. 编译 Ksnip ===
+            echo '>>> [4/6] 编译 Ksnip...'
+            git clone https://github.com/ksnip/ksnip.git
+            cd ksnip
+            mkdir build && cd build
+            # 安装到 /AppDir/usr，这是后续打包的基础
+            cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/AppDir/usr
+            make -j2
+            make install
+            
+            # === 5. 准备依赖收集工具 (linuxdeploy) ===
+            echo '>>> [5/6] 准备 linuxdeploy...'
+            cd /work
+            wget -nv https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-aarch64.AppImage
+            chmod +x linuxdeploy-aarch64.AppImage
+            
+            # 解压 linuxdeploy (为了在 QEMU 下运行)
+            OFFSET=\$(grep -aob \"hsqs\" linuxdeploy-aarch64.AppImage | head -n 1 | cut -d: -f1)
+            unsquashfs -o \$OFFSET -d linuxdeploy-root linuxdeploy-aarch64.AppImage
+            
+            # === 6. 智能收集与打包 (关键步骤) ===
+            echo '>>> [6/6] 智能收集依赖并打包...'
+            export QT_PLUGIN_PATH=/usr/lib/aarch64-linux-gnu/qt5/plugins/
+            export LD_LIBRARY_PATH=/usr/lib:/usr/local/lib
+            
+            # 【修复 1】自动寻找文件，绝不写死路径
+            DESKTOP_FILE=\$(find /AppDir -name "*.desktop" | head -n 1)
+            ICON_FILE=\$(find /AppDir -name "*.svg" | grep -i ksnip | head -n 1)
+            
+            # 保底：如果安装目录没图标，去源码目录找
+            if [ -z \"\$ICON_FILE\" ]; then
+                 ICON_FILE=\$(find /tmp/build_src/ksnip -name "*.svg" | grep -v test | grep -i ksnip | head -n 1)
+            fi
+            
+            echo \"Desktop: \$DESKTOP_FILE\"
+            echo \"Icon:    \$ICON_FILE\"
+
+            if [ -z \"\$DESKTOP_FILE\" ] || [ -z \"\$ICON_FILE\" ]; then
+                echo \"致命错误：无法找到必要文件，列出 /AppDir 内容：\"
+                ls -R /AppDir
+                exit 1
+            fi
+            
+            # 【修复 2】修正 .desktop 里的执行路径，防止菜单启动失败
+            sed -i 's|^Exec=.*|Exec=ksnip|g' \"\$DESKTOP_FILE\"
+
+            # 【修复 3】只用 linuxdeploy 收集库，不生成 AppImage (--output appimage 被去掉了)
+            # 这会把所有依赖的 .so 文件复制到 /AppDir/usr/lib 和 plugins 下
+            ./linuxdeploy-root/AppRun \
+              --appdir /AppDir \
+              --desktop-file \"\$DESKTOP_FILE\" \
+              --icon-file \"\$ICON_FILE\"
+            
+            echo '依赖收集完成，开始压缩...'
+            
+            # 添加一个通用的启动脚本，方便用户
+            cat > /AppDir/AppRun <<EOF
+            #!/bin/bash
+            SELF=\$(readlink -f "\$0")
+            HERE=\${SELF%/*}
+            export LD_LIBRARY_PATH=\${HERE}/usr/lib:\$LD_LIBRARY_PATH
+            export QT_PLUGIN_PATH=\${HERE}/usr/plugins
+            exec \${HERE}/usr/bin/ksnip "\$@"
+            EOF
+            chmod +x /AppDir/AppRun
+            
+            # 打包成 tar.gz
+            mv /AppDir ksnip-arm64
+            tar -czvf ksnip-arm64-portable.tar.gz ksnip-arm64/
+            
+            echo '>>> 构建成功！'
+          "
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ksnip-arm64-portable
+          path: ksnip-arm64-portable.tar.gz
