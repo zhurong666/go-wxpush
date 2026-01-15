@@ -1,0 +1,42 @@
+name: Download ARM64 Wheels for UOS
+
+on:
+  workflow_dispatch: # 手动触发
+
+jobs:
+  download-packages:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+        with:
+          platforms: linux/arm64
+
+      - name: Download Wheels in ARM64 Container
+        run: |
+          # 启动一个 ARM64 的 Python 3.11 (基于 Debian Buster) 容器
+          # 挂载当前目录到容器内，并在容器内执行 pip download
+          docker run --rm -v ${{ github.workspace }}:/work -w /work arm64v8/python:3.11-buster /bin/bash -c "
+            mkdir -p dist
+            echo '开始下载 PySide6 (兼容模式)...'
+            
+            # 这里我们利用 pip 的自动匹配，因为我们在 arm64 容器里，它绝对不会下错！
+            # 这里的 trick 是：PySide6 6.5.0 可能没有预编译包，我们尝试由 pip 自动寻找最佳版本
+            # 或者我们直接下载你之前想要的 PyQt6 (6.7.1)
+            
+            pip download PyQt6==6.7.1 --dest dist --only-binary=:all:
+            pip download PyQt6-Qt6==6.7.2 --dest dist --only-binary=:all:
+            pip download PyQt6-sip==13.8.0 --dest dist --only-binary=:all:
+            
+            echo '下载完成，文件列表：'
+            ls -lh dist
+          "
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: arm64-wheels
+          path: dist/
