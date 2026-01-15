@@ -1,0 +1,97 @@
+name: Build Ksnip ARM64 (Full Source Build)
+
+on: workflow_dispatch
+
+jobs:
+  build-arm64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      # 1. 启用 QEMU (核心)
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+        with:
+          platforms: linux/arm64
+
+      # 2. 这里的 Docker 脚本是关键
+      - name: Build All from Source
+        run: |
+          docker run --rm --platform linux/arm64 \
+          -v ${{ github.workspace }}:/work \
+          ubuntu:22.04 /bin/bash -c "
+            
+            # === 0. 全局设置：遇到错误立即退出，打印详细日志 ===
+            set -e  
+            export DEBIAN_FRONTEND=noninteractive
+            export INSTALL_PREFIX=/usr
+            
+            echo '>>> [1/6] 安装基础编译环境...'
+            apt-get update
+            apt-get install -y build-essential cmake git wget file \
+                qtbase5-dev libqt5svg5-dev libqt5x11extras5-dev \
+                libxcb-xinerama0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+                libx11-dev zlib1g-dev
+            
+            # 创建临时构建目录
+            mkdir -p /tmp/build_src
+            cd /tmp/build_src
+
+            # === 2. 编译依赖库 1: kColorPicker ===
+            echo '>>> [2/6] 编译 kColorPicker...'
+            git clone https://github.com/ksnip/kColorPicker.git
+            cd kColorPicker
+            mkdir build && cd build
+            cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=\$INSTALL_PREFIX -DBUILD_SHARED_LIBS=ON
+            make -j\$(nproc)
+            make install
+            cd ../..
+
+            # === 3. 编译依赖库 2: kImageAnnotator ===
+            echo '>>> [3/6] 编译 kImageAnnotator...'
+            git clone https://github.com/ksnip/kImageAnnotator.git
+            cd kImageAnnotator
+            mkdir build && cd build
+            cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=\$INSTALL_PREFIX -DBUILD_SHARED_LIBS=ON
+            make -j\$(nproc)
+            make install
+            cd ../..
+
+            # === 4. 编译主角: Ksnip ===
+            echo '>>> [4/6] 编译 Ksnip...'
+            git clone https://github.com/ksnip/ksnip.git
+            cd ksnip
+            mkdir build && cd build
+            # 注意：这里的 CMAKE_INSTALL_PREFIX 设为 /AppDir/usr 是为了 AppImage 打包
+            cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/AppDir/usr
+            make -j\$(nproc)
+            make install
+            
+            # === 5. 准备打包 AppImage ===
+            echo '>>> [5/6] 下载并配置 LinuxDeploy...'
+            cd /work
+            wget -nv https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-aarch64.AppImage
+            chmod +x linuxdeploy-aarch64.AppImage
+            
+            # 设置环境变量，让工具能找到 Qt 插件
+            export QT_PLUGIN_PATH=/usr/lib/aarch64-linux-gnu/qt5/plugins/
+            export LD_LIBRARY_PATH=/usr/lib:/usr/local/lib
+            
+            echo '>>> [6/6] 生成 AppImage...'
+            # 这里的路径必须对应上面 cmake install 的位置
+            ./linuxdeploy-aarch64.AppImage \
+              --appdir /AppDir \
+              --desktop-file /AppDir/usr/share/applications/org.ksnip.ksnip.desktop \
+              --icon-file /AppDir/usr/share/icons/hicolor/scalable/apps/org.ksnip.ksnip.svg \
+              --output appimage
+
+            echo '>>> 构建完成！'
+            ls -lh *.AppImage
+            chmod 777 *.AppImage
+          "
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ksnip-arm64-full
+          path: ./*.AppImage
