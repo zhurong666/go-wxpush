@@ -1,0 +1,98 @@
+name: Build Ksnip ARM64 (Unpack Fix)
+
+on: workflow_dispatch
+
+jobs:
+  build-arm64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+        with:
+          platforms: linux/arm64
+
+      - name: Build All from Source
+        run: |
+          docker run --rm --platform linux/arm64 \
+          -v ${{ github.workspace }}:/work \
+          ubuntu:22.04 /bin/bash -c "
+            
+            set -e  
+            export DEBIAN_FRONTEND=noninteractive
+            export INSTALL_PREFIX=/usr
+            
+            echo '>>> [1/7] 安装编译环境和解压工具...'
+            apt-get update
+            # 【关键修改】增加了 squashfs-tools 用于解压 AppImage
+            apt-get install -y build-essential cmake git wget file \
+                qtbase5-dev libqt5svg5-dev libqt5x11extras5-dev \
+                libxcb-xinerama0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+                libx11-dev zlib1g-dev \
+                qttools5-dev qttools5-dev-tools \
+                extra-cmake-modules \
+                squashfs-tools
+
+            mkdir -p /tmp/build_src
+            cd /tmp/build_src
+
+            echo '>>> [2/7] 编译 kColorPicker...'
+            git clone https://github.com/ksnip/kColorPicker.git
+            cd kColorPicker
+            mkdir build && cd build
+            cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=\$INSTALL_PREFIX -DBUILD_SHARED_LIBS=ON \
+                     -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF
+            make -j2
+            make install
+            cd ../..
+
+            echo '>>> [3/7] 编译 kImageAnnotator...'
+            git clone https://github.com/ksnip/kImageAnnotator.git
+            cd kImageAnnotator
+            mkdir build && cd build
+            cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=\$INSTALL_PREFIX -DBUILD_SHARED_LIBS=ON \
+                     -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF
+            make -j2
+            make install
+            cd ../..
+
+            echo '>>> [4/7] 编译 Ksnip...'
+            git clone https://github.com/ksnip/ksnip.git
+            cd ksnip
+            mkdir build && cd build
+            cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/AppDir/usr
+            make -j2
+            make install
+            
+            echo '>>> [5/7] 准备打包工具 (特殊处理)...'
+            cd /work
+            wget -nv https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-aarch64.AppImage
+            chmod +x linuxdeploy-aarch64.AppImage
+            
+            # 【关键修改】不直接运行 AppImage，而是解压它！
+            # 这样可以绕过 QEMU 对 AppImage 格式识别的 bug，也绕过了 FUSE 权限问题
+            echo '正在解压 linuxdeploy...'
+            unsquashfs -d linuxdeploy-root linuxdeploy-aarch64.AppImage
+            
+            export QT_PLUGIN_PATH=/usr/lib/aarch64-linux-gnu/qt5/plugins/
+            export LD_LIBRARY_PATH=/usr/lib:/usr/local/lib
+            
+            echo '>>> [6/7] 生成 AppImage...'
+            # 使用解压后的 AppRun 来运行
+            ./linuxdeploy-root/AppRun \
+              --appdir /AppDir \
+              --desktop-file /AppDir/usr/share/applications/org.ksnip.ksnip.desktop \
+              --icon-file /AppDir/usr/share/icons/hicolor/scalable/apps/org.ksnip.ksnip.svg \
+              --output appimage
+
+            echo '>>> [7/7] 完成！'
+            mv *.AppImage ksnip-arm64.AppImage
+            chmod 777 ksnip-arm64.AppImage
+          "
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ksnip-arm64-final
+          path: ksnip-arm64.AppImage
