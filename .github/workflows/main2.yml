@@ -1,0 +1,37 @@
+name: Download Wheels111
+
+on: workflow_dispatch
+
+jobs:
+  download-packages:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+        with:
+          platforms: linux/arm64
+
+      - name: Download Wheels in ARM64 Container
+        run: |
+          # 使用 Debian Buster (和统信UOS同源) 容器，pip 会自动屏蔽不兼容的包
+          docker run --rm -v ${{ github.workspace }}:/work -w /work arm64v8/python:3.11-buster /bin/bash -c "
+            mkdir -p dist
+            
+            echo '=== 开始自动下载 PyQt6 及其所有依赖 ==='
+            # 这一行命令就够了！pip 会自动把 PyQt6-Qt6 和 PyQt6-sip 下载下来
+            # 并且保证下载下来的 Qt6 库绝对能在 Glibc 2.28 上跑
+            
+            pip download PyQt6==6.2.3 --dest dist --only-binary=:all:
+            
+            echo '=== 下载完成，清单如下： ==='
+            ls -lh dist
+          "
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: arm64-wheels-auto
+          path: dist/
