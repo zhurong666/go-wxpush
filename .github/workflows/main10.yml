@@ -1,0 +1,94 @@
+name: Build Ksnip ARM64 (AppImage)
+
+on: workflow_dispatch
+
+jobs:
+  build-arm64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      # 1. 启用 QEMU 模拟器 (为了支持 ARM64)
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+        with:
+          platforms: linux/arm64
+
+      # 2. 在 ARM64 容器中编译并打包
+      - name: Build in Docker (ARM64)
+        run: |
+          docker run --rm --platform linux/arm64 \
+          -v ${{ github.workspace }}:/work \
+          -w /work \
+          ubuntu:22.04 /bin/bash -c "
+            
+            # === A. 环境准备 ===
+            # 避免交互式提问卡住流程
+            export DEBIAN_FRONTEND=noninteractive
+            
+            echo '>>> 更新 apt 源并安装构建工具和依赖...'
+            apt-get update
+            # 安装构建工具: cmake, build-essential, git
+            # 安装 Qt5 环境: qtbase5-dev, 插件等
+            # 关键点: 直接从 apt 安装 ksnip 的依赖库 (libkimageannotator-dev 等)，省去手动编译的痛苦
+            apt-get install -y build-essential cmake git wget file \
+                qtbase5-dev libqt5svg5-dev libqt5x11extras5-dev \
+                libxcb-xinerama0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+                libkimageannotator-dev libkcolorpicker-dev
+
+            echo '>>> 验证架构: \$(uname -m)'
+            
+            # === B. 编译 Ksnip (基于你提供的步骤) ===
+            echo '>>> 1. 克隆代码 (如果要特定版本，可在 checkout 步骤指定，这里演示最新版)'
+            # 注意：因为 action 已经 checkout 了代码挂载进来了，我们直接用挂载的目录，或者重新 clone
+            # 这里为了稳妥，我们按照你的指令重新 clone 到容器内部的一个纯净目录
+            rm -rf /tmp/build_area && mkdir -p /tmp/build_area
+            cd /tmp/build_area
+            
+            git clone https://github.com/ksnip/ksnip.git
+            cd ksnip
+            
+            echo '>>> 2. 编译构建'
+            mkdir build && cd build
+            # CMAKE_INSTALL_PREFIX 设置为 /AppDir/usr 是为了后续制作 AppImage
+            cmake .. -DCMAKE_INSTALL_PREFIX=/AppDir/usr -DCMAKE_BUILD_TYPE=Release
+            make -j\$(nproc)
+            
+            echo '>>> 3. 安装到临时目录 (AppDir)'
+            make install
+            
+            # === C. 打包成 AppImage (这是“可以直接运行”的关键) ===
+            echo '>>> 4. 准备打包工具 linuxdeploy (ARM64版本)'
+            cd /tmp/build_area
+            wget https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-aarch64.AppImage
+            chmod +x linuxdeploy-aarch64.AppImage
+            
+            echo '>>> 5. 开始打包'
+            # --appdir 指定安装目录
+            # --output appimage 指定输出格式
+            # --desktop-file 指定桌面入口文件 (linuxdeploy 会自动提取图标和分类)
+            # --icon-file 指定图标
+            # 这里的路径是基于 cmake install 后的相对路径
+            
+            # 必须设置环境变量让 linuxdeploy 找到 Qt 插件
+            export QT_PLUGIN_PATH=/usr/lib/aarch64-linux-gnu/qt5/plugins/
+            
+            ./linuxdeploy-aarch64.AppImage \
+              --appdir /AppDir \
+              --desktop-file /AppDir/usr/share/applications/org.ksnip.ksnip.desktop \
+              --icon-file /AppDir/usr/share/icons/hicolor/scalable/apps/org.ksnip.ksnip.svg \
+              --output appimage
+              
+            # === D. 导出结果 ===
+            echo '>>> 6. 移动产物到工作区'
+            ls -lh *.AppImage
+            mv *.AppImage /work/
+            chmod 777 /work/*.AppImage
+          "
+
+      # 3. 上传结果
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ksnip-arm64-executable
+          path: ksnip*.AppImage
