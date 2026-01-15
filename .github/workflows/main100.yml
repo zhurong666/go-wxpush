@@ -1,0 +1,121 @@
+name: Build Ksnip ARM64 (Victory Auto-Find)
+
+on: workflow_dispatch
+
+jobs:
+  build-arm64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+        with:
+          platforms: linux/arm64
+
+      - name: Build and Pack
+        run: |
+          docker run --rm --platform linux/arm64 \
+          -v ${{ github.workspace }}:/work \
+          ubuntu:22.04 /bin/bash -c "
+            
+            set -e  
+            export DEBIAN_FRONTEND=noninteractive
+            export INSTALL_PREFIX=/usr
+            
+            echo '=== [1/7] 安装全套环境 ==='
+            apt-get update
+            apt-get install -y build-essential cmake git wget file grep findutils \
+                qtbase5-dev libqt5svg5-dev libqt5x11extras5-dev \
+                libxcb-xinerama0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+                libx11-dev zlib1g-dev \
+                qttools5-dev qttools5-dev-tools \
+                extra-cmake-modules \
+                squashfs-tools
+
+            mkdir -p /tmp/build_src
+            cd /tmp/build_src
+
+            echo '=== [2/7] 编译 kColorPicker ==='
+            git clone https://github.com/ksnip/kColorPicker.git
+            cd kColorPicker
+            mkdir build && cd build
+            cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=\$INSTALL_PREFIX -DBUILD_SHARED_LIBS=ON \
+                     -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF
+            make -j2
+            make install
+            cd ../..
+
+            echo '=== [3/7] 编译 kImageAnnotator ==='
+            git clone https://github.com/ksnip/kImageAnnotator.git
+            cd kImageAnnotator
+            mkdir build && cd build
+            cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=\$INSTALL_PREFIX -DBUILD_SHARED_LIBS=ON \
+                     -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF
+            make -j2
+            make install
+            cd ../..
+
+            echo '=== [4/7] 编译 Ksnip ==='
+            git clone https://github.com/ksnip/ksnip.git
+            cd ksnip
+            mkdir build && cd build
+            cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/AppDir/usr
+            make -j2
+            make install
+            
+            echo '=== [5/7] 暴力拆解打包工具 (Offset Hack) ==='
+            cd /work
+            wget -nv https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-aarch64.AppImage
+            chmod +x linuxdeploy-aarch64.AppImage
+            
+            # 计算偏移量并解压 (这步之前已经证明成功了)
+            OFFSET=\$(grep -aob \"hsqs\" linuxdeploy-aarch64.AppImage | head -n 1 | cut -d: -f1)
+            unsquashfs -o \$OFFSET -d linuxdeploy-root linuxdeploy-aarch64.AppImage
+            
+            echo '=== [6/7] 智能打包 (Auto-Find) ==='
+            export QT_PLUGIN_PATH=/usr/lib/aarch64-linux-gnu/qt5/plugins/
+            export LD_LIBRARY_PATH=/usr/lib:/usr/local/lib
+            
+            # 【核心修改】不再猜测文件在哪里，而是直接找出来！
+            echo '正在自动搜索 desktop 和 icon 文件...'
+            
+            # 在 /AppDir 里找 desktop 文件
+            DESKTOP_FILE=\$(find /AppDir -name "*.desktop" | head -n 1)
+            
+            # 在 /AppDir 里找 svg 图标
+            ICON_FILE=\$(find /AppDir -name "*.svg" | grep -i ksnip | head -n 1)
+            
+            # 双重保险：如果安装目录没图标，就去源码目录偷一个
+            if [ -z \"\$ICON_FILE\" ]; then
+                echo '警告：安装目录未找到图标，尝试从源码目录获取...'
+                ICON_FILE=\$(find /tmp/build_src/ksnip -name "*.svg" | grep -v test | grep -i ksnip | head -n 1)
+            fi
+            
+            echo \"使用桌面文件: \$DESKTOP_FILE\"
+            echo \"使用图标文件: \$ICON_FILE\"
+            
+            if [ -z \"\$DESKTOP_FILE\" ] || [ -z \"\$ICON_FILE\" ]; then
+                echo \"错误：仍然无法找到必要文件！停止构建。\"
+                ls -R /AppDir
+                exit 1
+            fi
+
+            # 运行解压出来的 linuxdeploy
+            ./linuxdeploy-root/usr/bin/linuxdeploy \
+              --appdir /AppDir \
+              --desktop-file \"\$DESKTOP_FILE\" \
+              --icon-file \"\$ICON_FILE\" \
+              --output appimage
+
+            echo '=== [7/7] 大功告成 ==='
+            mv *.AppImage ksnip-arm64.AppImage
+            chmod 777 ksnip-arm64.AppImage
+            ls -lh ksnip-arm64.AppImage
+          "
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ksnip-arm64-stable
+          path: ksnip-arm64.AppImage
