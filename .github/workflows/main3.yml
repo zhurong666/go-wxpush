@@ -1,0 +1,72 @@
+name: Build Full Offline Environment (PyQt5 + Playwright)
+
+on: workflow_dispatch
+
+jobs:
+  pack-env:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      # 1. 启用 ARM64 模拟器 (这是核心，保证下载的是 ARM64 的包)
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+        with:
+          platforms: linux/arm64
+
+      # 2. 使用 Miniforge 容器进行构建
+      - name: Create Portable Env
+        run: |
+          # 挂载当前目录到 /work
+          docker run --rm -v ${{ github.workspace }}:/work -w /work condaforge/miniforge3:latest /bin/bash -c "
+            
+            # 初始化 conda (为了在脚本中使用 activate)
+            source /opt/conda/etc/profile.d/conda.sh
+            
+            echo '=== 1. 创建基础环境 (Conda 负责底层库) ==='
+            # 优先用 Conda 安装重依赖库 (Pandas, PyQt, PyInstaller) 以保证 ARM64 兼容性
+            # 注意：requests, openpyxl, loguru 也用 conda 装，最稳
+            conda create -n uos_app python=3.11 \
+              pyqt=5.15 \
+              pandas \
+              openpyxl \
+              requests \
+              loguru \
+              pyinstaller \
+              -c conda-forge -y
+            
+            echo '=== 2. 激活环境 ==='
+            conda activate uos_app
+            
+            echo '=== 3. 安装 Playwright 1.56 (使用 pip 指定版本) ==='
+            # Playwright 建议用 pip 安装以获取精准版本
+            pip install playwright==1.56.0
+            
+            echo '=== 4. 下载 Playwright 浏览器 (关键步骤！) ==='
+            # 默认浏览器装在 /root/.cache，打包带不走。
+            # 必须设置环境变量，把浏览器下载到环境目录内部！
+            export PLAYWRIGHT_BROWSERS_PATH=\$CONDA_PREFIX/pw-browsers
+            
+            echo '正在下载 Chromium (仅下载这一个以减小体积，如需全部请去掉 chromium 参数)...'
+            playwright install chromium
+            
+            # 安装系统依赖的占位符 (防止 playwright install 报错，但在 UOS 上运行时仍需系统库支持)
+            playwright install-deps chromium || true
+            
+            echo '=== 5. 安装 Conda-Pack ==='
+            conda install -n base conda-pack -c conda-forge -y
+            
+            echo '=== 6. 开始打包 ==='
+            # 这会将 Python + 所有库 + 下载好的浏览器 统统打成一个包
+            conda pack -n uos_app -o uos_full_env.tar.gz
+            
+            echo '=== 7. 调整权限 ==='
+            chmod 777 uos_full_env.tar.gz
+          "
+
+      # 3. 上传结果 (文件可能会比较大，约 300MB-500MB)
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: uos-full-env
+          path: uos_full_env.tar.gz
