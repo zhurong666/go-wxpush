@@ -1,0 +1,128 @@
+name: Build Ksnip 1.10 (Legacy Stable)
+
+on: workflow_dispatch
+
+jobs:
+  build-legacy-stable:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+        with:
+          platforms: linux/arm64
+
+      - name: Build and Package
+        run: |
+          docker run --rm --platform linux/arm64 \
+          -v ${{ github.workspace }}:/work \
+          ubuntu:20.04 /bin/bash -c "
+            
+            set -e
+            export DEBIAN_FRONTEND=noninteractive
+            export TZ=Etc/UTC
+            export INSTALL_PREFIX=/usr
+            
+            echo '=== [1/7] 安装依赖 (Ubuntu 20.04) ==='
+            apt-get update
+            # 安装基础环境 (Qt 5.12)
+            apt-get install -y build-essential cmake git wget file grep findutils sed \
+                qt5-default libqt5svg5-dev libqt5x11extras5-dev \
+                libxcb-xinerama0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+                libx11-dev zlib1g-dev \
+                qttools5-dev qttools5-dev-tools \
+                extra-cmake-modules \
+                squashfs-tools \
+                tzdata
+
+            mkdir -p /tmp/build_src
+            cd /tmp/build_src
+
+            # === [核心修改] 锁定 git 版本，不再使用最新版 ===
+
+            echo '=== [2/7] 编译 kColorPicker (v0.2.0) ==='
+            # 这里的 v0.2.0 完美支持 Qt 5.12
+            git clone -b v0.2.0 https://github.com/ksnip/kColorPicker.git
+            cd kColorPicker
+            mkdir build && cd build
+            cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=\$INSTALL_PREFIX -DBUILD_SHARED_LIBS=ON \
+                     -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF
+            make -j2
+            make install
+            cd ../..
+
+            echo '=== [3/7] 编译 kImageAnnotator (v0.6.1) ==='
+            # 这里的 v0.6.1 完美支持 Qt 5.12
+            git clone -b v0.6.1 https://github.com/ksnip/kImageAnnotator.git
+            cd kImageAnnotator
+            mkdir build && cd build
+            cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=\$INSTALL_PREFIX -DBUILD_SHARED_LIBS=ON \
+                     -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF
+            make -j2
+            make install
+            cd ../..
+
+            echo '=== [4/7] 编译 Ksnip (v1.10.1) ==='
+            # v1.10.1 是最后一个完美支持 Qt 5.12 的稳定版
+            git clone -b v1.10.1 https://github.com/ksnip/ksnip.git
+            cd ksnip
+            mkdir build && cd build
+            cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/AppDir/usr
+            make -j2
+            make install
+            
+            echo '=== [5/7] 准备打包工具 ==='
+            cd /work
+            wget -nv https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-aarch64.AppImage
+            chmod +x linuxdeploy-aarch64.AppImage
+            OFFSET=\$(grep -aob \"hsqs\" linuxdeploy-aarch64.AppImage | head -n 1 | cut -d: -f1)
+            unsquashfs -o \$OFFSET -d linuxdeploy-root linuxdeploy-aarch64.AppImage
+            
+            echo '=== [6/7] 智能打包与库注入 ==='
+            export QT_PLUGIN_PATH=/usr/lib/aarch64-linux-gnu/qt5/plugins/
+            export LD_LIBRARY_PATH=/usr/lib:/usr/local/lib
+            
+            DESKTOP_FILE=\$(find /AppDir -name "*.desktop" | head -n 1)
+            ICON_FILE=\$(find /AppDir -name "*.svg" | grep -i ksnip | head -n 1)
+            
+            if [ -z \"\$ICON_FILE\" ]; then
+                 ICON_FILE=\$(find /tmp/build_src/ksnip -name "*.svg" | grep -v test | grep -i ksnip | head -n 1)
+            fi
+            
+            sed -i 's|^Exec=.*|Exec=ksnip|g' \"\$DESKTOP_FILE\"
+
+            # 1. 收集依赖
+            ./linuxdeploy-root/AppRun \
+              --appdir /AppDir \
+              --desktop-file \"\$DESKTOP_FILE\" \
+              --icon-file \"\$ICON_FILE\"
+            
+            # 2. 注入 C++ 兼容库 (解决 UOS 上 libstdc++ 过旧的问题)
+            echo '注入兼容库...'
+            cp /usr/lib/aarch64-linux-gnu/libstdc++.so.6 /AppDir/usr/lib/
+            cp /lib/aarch64-linux-gnu/libgcc_s.so.1 /AppDir/usr/lib/
+            
+            echo '生成启动脚本...'
+            rm -f /AppDir/AppRun
+            touch /AppDir/AppRun
+            echo '#!/bin/bash' >> /AppDir/AppRun
+            echo 'SELF=\$(readlink -f \"\$0\")' >> /AppDir/AppRun
+            echo 'HERE=\${SELF%/*}' >> /AppDir/AppRun
+            echo 'export LD_LIBRARY_PATH=\${HERE}/usr/lib:\$LD_LIBRARY_PATH' >> /AppDir/AppRun
+            echo 'export QT_PLUGIN_PATH=\${HERE}/usr/plugins' >> /AppDir/AppRun
+            echo 'exec \${HERE}/usr/bin/ksnip \"\$@\"' >> /AppDir/AppRun
+            chmod +x /AppDir/AppRun
+            
+            echo '开始压缩...'
+            mv /AppDir ksnip-arm64-v1.10
+            tar -czvf ksnip-arm64-stable.tar.gz ksnip-arm64-v1.10/
+            
+            ls -lh ksnip-arm64-stable.tar.gz
+          "
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ksnip-arm64-stable
+          path: ksnip-arm64-stable.tar.gz
