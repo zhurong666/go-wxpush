@@ -1,4 +1,4 @@
-name: Build SSR ARM64 (Final Fix)
+name: Build SSR ARM64 (Final Fix v2)
 
 on: workflow_dispatch
 
@@ -24,12 +24,12 @@ jobs:
             
             echo '>>> [1/5] 安装依赖...'
             apt-get update
-            # 基础编译工具 + Qt5 + 音视频库 + V4L2
+            # 补全了 libxinerama-dev 和 qttools5-dev
             apt-get install -y build-essential cmake git wget file \
-                qt5-default qttools5-dev-tools libqt5x11extras5-dev \
+                qt5-default qttools5-dev-tools qttools5-dev libqt5x11extras5-dev \
                 libavformat-dev libavcodec-dev libavutil-dev libswscale-dev \
                 libasound2-dev libpulse-dev libjack-dev \
-                libx11-dev libxext-dev libxfixes-dev libxi-dev \
+                libx11-dev libxext-dev libxfixes-dev libxi-dev libxinerama-dev \
                 libgl1-mesa-dev libglu1-mesa-dev \
                 libv4l-dev \
                 squashfs-tools
@@ -40,9 +40,8 @@ jobs:
             cd ssr
             mkdir build && cd build
             
-            # 🔥 核心修复：
-            # -DWITH_PIPEWIRE=OFF: 关闭 PipeWire (解决 Ubuntu 20.04 找不到依赖的问题)
-            # -DWITH_GLINJECT=OFF: 关闭 GL 注入 (减少依赖，提高便携性)
+            # -DWITH_PIPEWIRE=OFF: 关闭 PipeWire
+            # -DWITH_GLINJECT=OFF: 关闭 GL 注入
             cmake .. \
                 -DCMAKE_INSTALL_PREFIX=/AppDir/usr \
                 -DCMAKE_BUILD_TYPE=Release \
@@ -55,47 +54,4 @@ jobs:
 
             echo '>>> [3/5] 准备打包工具...'
             cd /work
-            # 使用 continuous 版本下载 linuxdeploy
-            wget -c https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-aarch64.AppImage
-            wget -c https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-aarch64.AppImage
-            
-            chmod +x linuxdeploy*.AppImage
-            
-            # 解压工具 (绕过 Docker FUSE 限制)
-            sed -i 's|AI\x02|\x00\x00\x00|' linuxdeploy-aarch64.AppImage
-            ./linuxdeploy-aarch64.AppImage --appimage-extract
-            mv squashfs-root linuxdeploy-root
-
-            sed -i 's|AI\x02|\x00\x00\x00|' linuxdeploy-plugin-qt-aarch64.AppImage
-            ./linuxdeploy-plugin-qt-aarch64.AppImage --appimage-extract
-            mv squashfs-root linuxdeploy-qt-plugin
-
-            echo '>>> [4/5] 生成 AppImage...'
-            export QT_PLUGIN_PATH=/usr/lib/aarch64-linux-gnu/qt5/plugins/
-            export LD_LIBRARY_PATH=/usr/lib:/usr/local/lib
-            
-            # 智能查找 desktop 和 icon 文件
-            DESKTOP_FILE=\$(find /AppDir -name \"simplescreenrecorder.desktop\")
-            ICON_FILE=\$(find /AppDir -name \"simplescreenrecorder.png\" | grep 256 | head -n 1)
-
-            # 配置插件路径
-            mv linuxdeploy-qt-plugin/AppRun /usr/bin/linuxdeploy-plugin-qt
-            
-            # 开始打包
-            ./linuxdeploy-root/AppRun \
-                --appdir /AppDir \
-                --desktop-file \$DESKTOP_FILE \
-                --icon-file \$ICON_FILE \
-                --plugin qt \
-                --output appimage
-            
-            # 重命名并清理
-            mv SimpleScreenRecorder-*.AppImage SSR-ARM64.AppImage
-            echo '✅ 构建成功！'
-          "
-
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: SSR-ARM64-Portable
-          path: SSR-ARM64.AppImage
+            wget -c
