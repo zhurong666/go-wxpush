@@ -1,4 +1,4 @@
-name: Build SSR ARM64 (AppImage)
+name: Build SSR ARM64 (AppImage) - Fixed
 
 on: workflow_dispatch
 
@@ -19,33 +19,29 @@ jobs:
           -v ${{ github.workspace }}:/work \
           ubuntu:20.04 /bin/bash -c "
             
-            # === 1. 环境准备 (Ubuntu 20.04) ===
             set -e
             export DEBIAN_FRONTEND=noninteractive
             export INSTALL_PREFIX=/usr
             
-            echo '>>> [1/5] 安装依赖...'
+            echo '>>> [1/5] 安装依赖 (修复缺少 V4L2 的问题)...'
             apt-get update
-            # 安装 SSR 编译所需的 Qt5 和音视频库
+            # 🔥 关键修改：添加了 libv4l-dev
             apt-get install -y build-essential cmake git wget file \
                 qt5-default qttools5-dev-tools libqt5x11extras5-dev \
                 libavformat-dev libavcodec-dev libavutil-dev libswscale-dev \
                 libasound2-dev libpulse-dev libjack-dev \
                 libx11-dev libxext-dev libxfixes-dev libxi-dev \
-                libgl1-mesa-dev libglu1-mesa-dev
-            
-            # 安装 squashfs-tools 用于打包 AppImage
-            apt-get install -y squashfs-tools
+                libgl1-mesa-dev libglu1-mesa-dev \
+                libv4l-dev \
+                squashfs-tools
 
-            # === 2. 编译 SimpleScreenRecorder ===
             echo '>>> [2/5] 编译 SimpleScreenRecorder...'
             cd /work
             git clone https://github.com/MaartenBaert/ssr.git
             cd ssr
             mkdir build && cd build
             
-            # 编译并安装到 /AppDir (临时目录)
-            # -DWITH_GLINJECT=OFF: 关闭 OpenGL 注入库(便携版带着个麻烦，且你主要录桌面)
+            # 关闭 GL注入库 (便携版不需要注入功能，且容易导致兼容性问题)
             cmake .. \
                 -DCMAKE_INSTALL_PREFIX=/AppDir/usr \
                 -DCMAKE_BUILD_TYPE=Release \
@@ -55,37 +51,37 @@ jobs:
             make -j\$(nproc)
             make install
 
-            # === 3. 准备打包工具 linuxdeploy ===
             echo '>>> [3/5] 准备打包工具...'
             cd /work
-            wget -nv https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-aarch64.AppImage
-            wget -nv https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-aarch64.AppImage
+            # 这里的 URL 使用 continuous 版本，如果下载失败可以换固定版本
+            wget -c https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-aarch64.AppImage
+            wget -c https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-aarch64.AppImage
             
             chmod +x linuxdeploy*.AppImage
             
-            # 解压 linuxdeploy (绕过 Docker 内 FUSE 限制)
+            # 提取 AppImage 内容以绕过 Docker FUSE 限制
             sed -i 's|AI\x02|\x00\x00\x00|' linuxdeploy-aarch64.AppImage
             ./linuxdeploy-aarch64.AppImage --appimage-extract
             mv squashfs-root linuxdeploy-root
 
-            # 解压 Qt 插件
             sed -i 's|AI\x02|\x00\x00\x00|' linuxdeploy-plugin-qt-aarch64.AppImage
             ./linuxdeploy-plugin-qt-aarch64.AppImage --appimage-extract
             mv squashfs-root linuxdeploy-qt-plugin
 
-            # === 4. 打包 AppImage ===
             echo '>>> [4/5] 生成 AppImage...'
-            
-            # 设置环境变量帮助工具找到 Qt 库
             export QT_PLUGIN_PATH=/usr/lib/aarch64-linux-gnu/qt5/plugins/
             export LD_LIBRARY_PATH=/usr/lib:/usr/local/lib
             
-            # 找到 desktop 文件和图标
-            DESKTOP_FILE=/AppDir/usr/share/applications/simplescreenrecorder.desktop
-            ICON_FILE=/AppDir/usr/share/icons/hicolor/256x256/apps/simplescreenrecorder.png
+            # 手动指定 desktop 和 icon 路径，确保打包工具能找到
+            DESKTOP_FILE=\$(find /AppDir -name \"simplescreenrecorder.desktop\")
+            ICON_FILE=\$(find /AppDir -name \"simplescreenrecorder.png\" | grep 256 | head -n 1)
 
-            # 运行打包
-            # --plugin qt: 自动把 Qt5 的库塞进去，解决依赖问题
+            # 为了让 linuxdeploy 找到插件，我们需要设置插件路径
+            # 这里我们直接手动调用 Qt 插件的逻辑可能比较复杂，我们改用环境变量方式
+            # 或者更简单的：直接用 --plugin qt 参数，前提是 linuxdeploy 能在 PATH 里找到插件
+            # 我们把插件移动到 PATH 路径下
+            mv linuxdeploy-qt-plugin/AppRun /usr/bin/linuxdeploy-plugin-qt
+            
             ./linuxdeploy-root/AppRun \
                 --appdir /AppDir \
                 --desktop-file \$DESKTOP_FILE \
@@ -93,9 +89,7 @@ jobs:
                 --plugin qt \
                 --output appimage
             
-            # 重命名产物
             mv SimpleScreenRecorder-*.AppImage SSR-ARM64.AppImage
-            
             echo '>>> 构建成功！'
           "
 
