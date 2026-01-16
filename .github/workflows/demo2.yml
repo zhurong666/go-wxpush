@@ -1,4 +1,4 @@
-name: Build SSR ARM64 (Final Fix v2)
+name: Build SSR ARM64 (Final Fix v3)
 
 on: workflow_dispatch
 
@@ -24,7 +24,6 @@ jobs:
             
             echo '>>> [1/5] 安装依赖...'
             apt-get update
-            # 补全了 libxinerama-dev 和 qttools5-dev
             apt-get install -y build-essential cmake git wget file \
                 qt5-default qttools5-dev-tools qttools5-dev libqt5x11extras5-dev \
                 libavformat-dev libavcodec-dev libavutil-dev libswscale-dev \
@@ -40,8 +39,6 @@ jobs:
             cd ssr
             mkdir build && cd build
             
-            # -DWITH_PIPEWIRE=OFF: 关闭 PipeWire
-            # -DWITH_GLINJECT=OFF: 关闭 GL 注入
             cmake .. \
                 -DCMAKE_INSTALL_PREFIX=/AppDir/usr \
                 -DCMAKE_BUILD_TYPE=Release \
@@ -59,13 +56,20 @@ jobs:
             
             chmod +x linuxdeploy*.AppImage
             
-            # 解压工具
+            # === 核心修复：防止解压冲突 ===
+            
+            # 1. 解压主程序
             sed -i 's|AI\x02|\x00\x00\x00|' linuxdeploy-aarch64.AppImage
             ./linuxdeploy-aarch64.AppImage --appimage-extract
+            # 立刻重命名，防止下次解压覆盖报错
+            rm -rf linuxdeploy-root  # 清理旧的(如果有)
             mv squashfs-root linuxdeploy-root
 
+            # 2. 解压 Qt 插件
             sed -i 's|AI\x02|\x00\x00\x00|' linuxdeploy-plugin-qt-aarch64.AppImage
             ./linuxdeploy-plugin-qt-aarch64.AppImage --appimage-extract
+            # 立刻重命名
+            rm -rf linuxdeploy-qt-plugin # 清理旧的(如果有)
             mv squashfs-root linuxdeploy-qt-plugin
 
             echo '>>> [4/5] 生成 AppImage...'
@@ -75,6 +79,7 @@ jobs:
             DESKTOP_FILE=\$(find /AppDir -name \"simplescreenrecorder.desktop\")
             ICON_FILE=\$(find /AppDir -name \"simplescreenrecorder.png\" | grep 256 | head -n 1)
 
+            # 移动插件到系统路径方便调用
             mv linuxdeploy-qt-plugin/AppRun /usr/bin/linuxdeploy-plugin-qt
             
             ./linuxdeploy-root/AppRun \
