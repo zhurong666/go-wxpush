@@ -54,4 +54,42 @@ jobs:
 
             echo '>>> [3/5] 准备打包工具...'
             cd /work
-            wget -c
+            wget -c https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-aarch64.AppImage
+            wget -c https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-aarch64.AppImage
+            
+            chmod +x linuxdeploy*.AppImage
+            
+            # 解压工具
+            sed -i 's|AI\x02|\x00\x00\x00|' linuxdeploy-aarch64.AppImage
+            ./linuxdeploy-aarch64.AppImage --appimage-extract
+            mv squashfs-root linuxdeploy-root
+
+            sed -i 's|AI\x02|\x00\x00\x00|' linuxdeploy-plugin-qt-aarch64.AppImage
+            ./linuxdeploy-plugin-qt-aarch64.AppImage --appimage-extract
+            mv squashfs-root linuxdeploy-qt-plugin
+
+            echo '>>> [4/5] 生成 AppImage...'
+            export QT_PLUGIN_PATH=/usr/lib/aarch64-linux-gnu/qt5/plugins/
+            export LD_LIBRARY_PATH=/usr/lib:/usr/local/lib
+            
+            DESKTOP_FILE=\$(find /AppDir -name \"simplescreenrecorder.desktop\")
+            ICON_FILE=\$(find /AppDir -name \"simplescreenrecorder.png\" | grep 256 | head -n 1)
+
+            mv linuxdeploy-qt-plugin/AppRun /usr/bin/linuxdeploy-plugin-qt
+            
+            ./linuxdeploy-root/AppRun \
+                --appdir /AppDir \
+                --desktop-file \$DESKTOP_FILE \
+                --icon-file \$ICON_FILE \
+                --plugin qt \
+                --output appimage
+            
+            mv SimpleScreenRecorder-*.AppImage SSR-ARM64.AppImage
+            echo '✅ 构建成功！'
+          "
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SSR-ARM64-Portable
+          path: SSR-ARM64.AppImage
