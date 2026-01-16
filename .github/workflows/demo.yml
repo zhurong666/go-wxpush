@@ -1,81 +1,72 @@
-name: Build Mitmproxy ARM64 (Offline Kit)
+name: Build Mitmproxy ARM64 (Fixed)
 
 on: workflow_dispatch
 
 jobs:
-  build-arm64-kit:
+  build-arm64-fixed:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
 
-      # 1. 启用 QEMU 以支持 ARM64 容器
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v2
         with:
           platforms: linux/arm64
 
-      # 2. 在 ARM64 容器中执行所有构建逻辑
-      - name: Build in Docker
+      - name: Build in Docker (Python 3.11 Base)
         run: |
+          # 🔥 关键修改：直接使用 Python 3.11 的官方镜像，不再手动安装
           docker run --rm --platform linux/arm64 \
           -v ${{ github.workspace }}:/work \
-          ubuntu:20.04 /bin/bash -c "
+          python:3.11-bullseye /bin/bash -c "
             
-            # === 环境配置 ===
             set -e
             export DEBIAN_FRONTEND=noninteractive
             
-            echo '>>> [1/5] 更新源并安装基础构建工具...'
+            echo '>>> [1/4] 安装编译工具 (GCC, CMake, Rust)...'
             apt-get update
-            # 安装 software-properties-common 以添加 PPA
-            apt-get install -y software-properties-common wget curl git build-essential \
-                               libssl-dev libffi-dev zlib1g-dev
+            # 安装构建依赖 (Rust 需要用于构建 cryptography 等库)
+            apt-get install -y build-essential cmake git libffi-dev libssl-dev zlib1g-dev curl
             
-            echo '>>> [2/5] 安装 Python 3.11 (适配 mitmproxy 新版)...'
-            add-apt-repository -y ppa:deadsnakes/ppa
-            apt-get update
-            apt-get install -y python3.11 python3.11-dev python3.11-venv
-            
-            echo '>>> [3/5] 安装 Rust (某些加密库在 ARM 上需要编译)...'
+            # 安装 Rust (mitmproxy 依赖的某些库必须用 Rust 编译)
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
             source \$HOME/.cargo/env
             
-            # === 准备工作目录 ===
-            mkdir -p /work/output/mitmproxy-wheels
-            python3.11 -m venv /tmp/venv
-            source /tmp/venv/bin/activate
+            echo '>>> [2/4] 准备 Python 环境...'
+            # Python 3.11 已经内置了，直接升级 pip
             pip install --upgrade pip wheel pyinstaller
             
-            # === 核心任务 A: 下载离线依赖包 (最稳方案) ===
-            echo '>>> [4/5] 下载 mitmproxy 全套离线依赖...'
-            # 下载最新版 mitmproxy (或指定 ==10.4.2)
-            pip download mitmproxy --dest /work/output/mitmproxy-wheels
+            mkdir -p /work/output/mitmproxy-wheels
             
-            # === 核心任务 B: 尝试构建单文件可执行程序 (方便方案) ===
-            echo '>>> [5/5] 编译单文件 mitmdump (PyInstaller)...'
-            pip install mitmproxy
+            echo '>>> [3/4] 下载离线依赖包 (Wheel)...'
+            # 下载 mitmproxy 及其所有依赖的 .whl 文件
+            # 这一步会调用 GCC/Rust 现场编译那些没有现成 ARM64 包的库
+            pip download mitmproxy==10.4.2 --dest /work/output/mitmproxy-wheels
             
-            # 创建一个入口脚本用于打包
+            echo '>>> [4/4] 编译单文件 mitmdump (可选备用)...'
+            # 这是一个双保险：如果 wheel 安装失败，可以直接用这个二进制文件
+            pip install mitmproxy==10.4.2
+            
+            # 创建入口脚本
             echo 'from mitmproxy.tools.dump import mitmdump; mitmdump()' > launch_dump.py
             
-            # 打包成单文件，兼容性由 Ubuntu 20.04 保证
+            # 打包成单文件 (Stand-alone Binary)
             pyinstaller --clean --onefile --name mitmdump-arm64 launch_dump.py
             
-            # 移动构建好的二进制文件
+            # 整理产物
             mv dist/mitmdump-arm64 /work/output/
-            
-            # === 打包 ===
             cd /work/output
+            
             # 创建一键安装脚本
             echo '#!/bin/bash' > install.sh
             echo 'pip install --no-index --find-links=mitmproxy-wheels mitmproxy' >> install.sh
             chmod +x install.sh
             
+            # 压缩所有文件
             tar -czvf /work/mitmproxy-arm64-kit.tar.gz .
-            echo '>>> 构建完成！'
+            echo '✅ 构建成功！'
           "
 
-      # 3. 上传产物
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
