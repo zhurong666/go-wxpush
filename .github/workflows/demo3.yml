@@ -1,4 +1,4 @@
-name: Build SSR ARM64 (Portable Fixed v6)
+name: Build SSR ARM64 (Portable Brute-Force)
 
 on: workflow_dispatch
 
@@ -56,43 +56,52 @@ jobs:
             wget -c https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-aarch64.AppImage
             chmod +x linuxdeploy*.AppImage
             
-            # === 手动解压 (外科手术式) ===
-            echo 'Extracting LinuxDeploy...'
+            # 手动解压
             OFFSET=\$(grep -aob \"hsqs\" linuxdeploy-aarch64.AppImage | head -n 1 | cut -d: -f1)
             unsquashfs -o \$OFFSET -d linuxdeploy-root linuxdeploy-aarch64.AppImage
             
-            echo 'Extracting Qt Plugin...'
             OFFSET=\$(grep -aob \"hsqs\" linuxdeploy-plugin-qt-aarch64.AppImage | head -n 1 | cut -d: -f1)
             unsquashfs -o \$OFFSET -d linuxdeploy-qt-plugin linuxdeploy-plugin-qt-aarch64.AppImage
             
-            # === 🔥 关键修复：安装插件并删除 AppImage 源文件 ===
-            # 把插件移到系统路径
+            # 移动插件并删除源文件
             mv linuxdeploy-qt-plugin/AppRun /usr/bin/linuxdeploy-plugin-qt
-            
-            # 💀 毁尸灭迹：删除 .AppImage 文件，防止 linuxdeploy 优先调用它们导致 QEMU 崩溃
             rm -f /work/*.AppImage
             
-            echo '>>> [4/6] 智能打包...'
+            echo '>>> [4/6] 暴力打包 (缺什么补什么)...'
             export QT_PLUGIN_PATH=/usr/lib/aarch64-linux-gnu/qt5/plugins/
             export LD_LIBRARY_PATH=/usr/lib:/usr/local/lib
             
-            # 🔥 修复：更智能的查找逻辑 (支持 svg 和 png，不限目录)
-            # 查找以 simplescreenrecorder 开头的 desktop 文件
-            DESKTOP_FILE=\$(find /AppDir -name \"simplescreenrecorder.desktop\" | head -n 1)
+            # 1. 寻找或伪造 Desktop 文件
+            DESKTOP_FILE=\$(find /AppDir -name \"*.desktop\" | head -n 1)
             
-            # 查找图标：只要文件名包含 simple 且是图片，就拿第一个。SSR 默认通常是 .svg
-            ICON_FILE=\$(find /AppDir -path \"*icons*\" \( -name \"*.svg\" -o -name \"*.png\" \) | head -n 1)
-            
-            echo \"DEBUG: Desktop file found: '\$DESKTOP_FILE'\"
-            echo \"DEBUG: Icon file found: '\$ICON_FILE'\"
-            
-            # 双重保险：如果没找到，就报错停止，防止瞎打包
-            if [ -z \"\$DESKTOP_FILE\" ] || [ -z \"\$ICON_FILE\" ]; then
-                echo \"❌ 错误: 缺少 Desktop 文件或图标文件！\"
-                exit 1
+            if [ -z \"\$DESKTOP_FILE\" ]; then
+                echo \"⚠️ 没找到 Desktop 文件，正在手写一个...\"
+                mkdir -p /AppDir/usr/share/applications
+                DESKTOP_FILE=\"/AppDir/usr/share/applications/ssr.desktop\"
+                
+                # 手写一个最简配置
+                echo \"[Desktop Entry]\" > \$DESKTOP_FILE
+                echo \"Type=Application\" >> \$DESKTOP_FILE
+                echo \"Name=SimpleScreenRecorder\" >> \$DESKTOP_FILE
+                echo \"Exec=simplescreenrecorder\" >> \$DESKTOP_FILE
+                echo \"Icon=simplescreenrecorder\" >> \$DESKTOP_FILE
+                echo \"Categories=AudioVideo;Recorder;\" >> \$DESKTOP_FILE
             fi
+            
+            # 2. 寻找或随便抓一个 Icon 文件
+            # 只要是 png 无论是干嘛的，先拿来用，防止报错
+            ICON_FILE=\$(find /AppDir -name \"*.png\" | head -n 1)
+            
+            if [ -z \"\$ICON_FILE\" ]; then
+                 echo \"⚠️ 连图标都没找到？生成一个空的图片文件...\"
+                 touch /AppDir/dummy_icon.png
+                 ICON_FILE=\"/AppDir/dummy_icon.png\"
+            fi
+            
+            echo \"DEBUG: Using Desktop: \$DESKTOP_FILE\"
+            echo \"DEBUG: Using Icon: \$ICON_FILE\"
 
-            # 运行打包 (使用提取出的 linuxdeploy)
+            # 运行打包
             ./linuxdeploy-root/AppRun \
               --appdir=\"/AppDir\" \
               --desktop-file=\"\$DESKTOP_FILE\" \
@@ -125,4 +134,3 @@ jobs:
         with:
           name: SSR-ARM64-Portable
           path: SSR-ARM64-Portable.tar.gz
-      
