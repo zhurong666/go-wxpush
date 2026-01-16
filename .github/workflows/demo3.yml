@@ -1,0 +1,129 @@
+name: Build SSR ARM64 (Portable Tarball)
+
+on: workflow_dispatch
+
+jobs:
+  build-tarball:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+        with:
+          platforms: linux/arm64
+
+      - name: Build and Package
+        run: |
+          docker run --rm --platform linux/arm64 \
+          -v ${{ github.workspace }}:/work \
+          ubuntu:20.04 /bin/bash -c "
+            
+            # === 1. 环境配置 ===
+            set -e  # 遇到错误立即停止
+            export DEBIAN_FRONTEND=noninteractive
+            export INSTALL_PREFIX=/usr
+            
+            echo '>>> [1/6] 安装依赖 (Ubuntu 20.04)...'
+            apt-get update
+            # 安装编译工具 + SSR 依赖 + 解压工具(squashfs-tools)
+            apt-get install -y build-essential cmake git wget file grep findutils sed \
+                qt5-default qttools5-dev-tools qttools5-dev libqt5x11extras5-dev \
+                libavformat-dev libavcodec-dev libavutil-dev libswscale-dev \
+                libasound2-dev libpulse-dev libjack-dev \
+                libx11-dev libxext-dev libxfixes-dev libxi-dev libxinerama-dev \
+                libgl1-mesa-dev libglu1-mesa-dev \
+                libv4l-dev \
+                squashfs-tools
+
+            echo '>>> [2/6] 编译 SimpleScreenRecorder...'
+            cd /work
+            # 清理旧目录
+            rm -rf ssr
+            git clone https://github.com/MaartenBaert/ssr.git
+            cd ssr
+            mkdir build && cd build
+            
+            # 安装到 /AppDir/usr，方便后续打包
+            # 关闭 GLInject (不需要注入OpenGL游戏，提高兼容性)
+            # 关闭 PipeWire (老系统不需要，且缺少依赖)
+            cmake .. \
+                -DCMAKE_INSTALL_PREFIX=/AppDir/usr \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DWITH_GLINJECT=OFF \
+                -DWITH_PIPEWIRE=OFF \
+                -DWITH_QT5=ON
+            
+            make -j\$(nproc)
+            make install
+            
+            echo '>>> [3/6] 准备打包工具 (linuxdeploy)...'
+            cd /work
+            wget -c https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-aarch64.AppImage
+            wget -c https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-aarch64.AppImage
+            chmod +x linuxdeploy*.AppImage
+            
+            # === 关键：手动解压工具 (完全照搬 Ksnip 的逻辑) ===
+            # 计算偏移量，避开 QEMU 运行 AppImage 的 bug
+            
+            # 1. 解压主程序
+            OFFSET=\$(grep -aob \"hsqs\" linuxdeploy-aarch64.AppImage | head -n 1 | cut -d: -f1)
+            unsquashfs -o \$OFFSET -d linuxdeploy-root linuxdeploy-aarch64.AppImage
+            
+            # 2. 解压 Qt 插件
+            OFFSET=\$(grep -aob \"hsqs\" linuxdeploy-plugin-qt-aarch64.AppImage | head -n 1 | cut -d: -f1)
+            unsquashfs -o \$OFFSET -d linuxdeploy-qt-plugin linuxdeploy-plugin-qt-aarch64.AppImage
+            
+            # 把插件放到 bin 目录下，假装它是安装好的
+            mv linuxdeploy-qt-plugin/AppRun /usr/bin/linuxdeploy-plugin-qt
+
+            echo '>>> [4/6] 智能打包与库注入...'
+            export QT_PLUGIN_PATH=/usr/lib/aarch64-linux-gnu/qt5/plugins/
+            export LD_LIBRARY_PATH=/usr/lib:/usr/local/lib
+            
+            # 自动查找 desktop 和 icon 文件路径
+            DESKTOP_FILE=\$(find /AppDir -name \"simplescreenrecorder.desktop\" | head -n 1)
+            ICON_FILE=\$(find /AppDir -name \"simplescreenrecorder.png\" | grep 256 | head -n 1) # 选个清晰点的图标
+            
+            # 运行 linuxdeploy (只生成目录，不打成 AppImage)
+            # --plugin qt: 自动把 Qt5 的库吸入 /AppDir/usr/lib
+            ./linuxdeploy-root/AppRun \
+              --appdir /AppDir \
+              --desktop-file \$DESKTOP_FILE \
+              --icon-file \$ICON_FILE \
+              --plugin qt
+            
+            echo '>>> [5/6] 注入兼容库 & 创建启动脚本...'
+            
+            # 1. 注入 C++ 兼容库 (Ksnip 同款操作，防止麒麟 V10 报 GLIBCXX 错误)
+            echo 'Copying libstdc++ and libgcc...'
+            cp /usr/lib/aarch64-linux-gnu/libstdc++.so.6 /AppDir/usr/lib/
+            cp /lib/aarch64-linux-gnu/libgcc_s.so.1 /AppDir/usr/lib/
+
+            # 2. 创建 AppRun 启动脚本
+            rm -f /AppDir/AppRun
+            touch /AppDir/AppRun
+            
+            # 写入脚本内容：自动定位当前目录，设置 LD_LIBRARY_PATH
+            echo '#!/bin/bash' >> /AppDir/AppRun
+            echo 'SELF=\$(readlink -f \"\$0\")' >> /AppDir/AppRun
+            echo 'HERE=\${SELF%/*}' >> /AppDir/AppRun
+            echo 'export LD_LIBRARY_PATH=\${HERE}/usr/lib:\$LD_LIBRARY_PATH' >> /AppDir/AppRun
+            echo 'export QT_PLUGIN_PATH=\${HERE}/usr/plugins' >> /AppDir/AppRun
+            # 启动 SSR 主程序
+            echo 'exec \${HERE}/usr/bin/simplescreenrecorder \"\$@\"' >> /AppDir/AppRun
+            
+            chmod +x /AppDir/AppRun
+            
+            echo '>>> [6/6] 压缩打包...'
+            mv /AppDir SSR-ARM64-Portable
+            tar -czvf SSR-ARM64-Portable.tar.gz SSR-ARM64-Portable/
+            
+            ls -lh SSR-ARM64-Portable.tar.gz
+          "
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SSR-ARM64-Portable
+          path: SSR-ARM64-Portable.tar.gz
