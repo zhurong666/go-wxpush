@@ -1,4 +1,4 @@
-name: Build SSR ARM64 (AppImage) - Fixed
+name: Build SSR ARM64 (Final Fix)
 
 on: workflow_dispatch
 
@@ -21,11 +21,10 @@ jobs:
             
             set -e
             export DEBIAN_FRONTEND=noninteractive
-            export INSTALL_PREFIX=/usr
             
-            echo '>>> [1/5] 安装依赖 (修复缺少 V4L2 的问题)...'
+            echo '>>> [1/5] 安装依赖...'
             apt-get update
-            # 🔥 关键修改：添加了 libv4l-dev
+            # 基础编译工具 + Qt5 + 音视频库 + V4L2
             apt-get install -y build-essential cmake git wget file \
                 qt5-default qttools5-dev-tools libqt5x11extras5-dev \
                 libavformat-dev libavcodec-dev libavutil-dev libswscale-dev \
@@ -41,11 +40,14 @@ jobs:
             cd ssr
             mkdir build && cd build
             
-            # 关闭 GL注入库 (便携版不需要注入功能，且容易导致兼容性问题)
+            # 🔥 核心修复：
+            # -DWITH_PIPEWIRE=OFF: 关闭 PipeWire (解决 Ubuntu 20.04 找不到依赖的问题)
+            # -DWITH_GLINJECT=OFF: 关闭 GL 注入 (减少依赖，提高便携性)
             cmake .. \
                 -DCMAKE_INSTALL_PREFIX=/AppDir/usr \
                 -DCMAKE_BUILD_TYPE=Release \
                 -DWITH_GLINJECT=OFF \
+                -DWITH_PIPEWIRE=OFF \
                 -DWITH_QT5=ON
                 
             make -j\$(nproc)
@@ -53,13 +55,13 @@ jobs:
 
             echo '>>> [3/5] 准备打包工具...'
             cd /work
-            # 这里的 URL 使用 continuous 版本，如果下载失败可以换固定版本
+            # 使用 continuous 版本下载 linuxdeploy
             wget -c https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-aarch64.AppImage
             wget -c https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-aarch64.AppImage
             
             chmod +x linuxdeploy*.AppImage
             
-            # 提取 AppImage 内容以绕过 Docker FUSE 限制
+            # 解压工具 (绕过 Docker FUSE 限制)
             sed -i 's|AI\x02|\x00\x00\x00|' linuxdeploy-aarch64.AppImage
             ./linuxdeploy-aarch64.AppImage --appimage-extract
             mv squashfs-root linuxdeploy-root
@@ -72,16 +74,14 @@ jobs:
             export QT_PLUGIN_PATH=/usr/lib/aarch64-linux-gnu/qt5/plugins/
             export LD_LIBRARY_PATH=/usr/lib:/usr/local/lib
             
-            # 手动指定 desktop 和 icon 路径，确保打包工具能找到
+            # 智能查找 desktop 和 icon 文件
             DESKTOP_FILE=\$(find /AppDir -name \"simplescreenrecorder.desktop\")
             ICON_FILE=\$(find /AppDir -name \"simplescreenrecorder.png\" | grep 256 | head -n 1)
 
-            # 为了让 linuxdeploy 找到插件，我们需要设置插件路径
-            # 这里我们直接手动调用 Qt 插件的逻辑可能比较复杂，我们改用环境变量方式
-            # 或者更简单的：直接用 --plugin qt 参数，前提是 linuxdeploy 能在 PATH 里找到插件
-            # 我们把插件移动到 PATH 路径下
+            # 配置插件路径
             mv linuxdeploy-qt-plugin/AppRun /usr/bin/linuxdeploy-plugin-qt
             
+            # 开始打包
             ./linuxdeploy-root/AppRun \
                 --appdir /AppDir \
                 --desktop-file \$DESKTOP_FILE \
@@ -89,8 +89,9 @@ jobs:
                 --plugin qt \
                 --output appimage
             
+            # 重命名并清理
             mv SimpleScreenRecorder-*.AppImage SSR-ARM64.AppImage
-            echo '>>> 构建成功！'
+            echo '✅ 构建成功！'
           "
 
       - name: Upload Artifact
