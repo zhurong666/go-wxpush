@@ -1,4 +1,4 @@
-name: Build SSR ARM64 (Portable Brute-Force)
+name: Build SSR ARM64 (Hybrid Auto-Gen)
 
 on: workflow_dispatch
 
@@ -22,7 +22,7 @@ jobs:
             set -e
             export DEBIAN_FRONTEND=noninteractive
             
-            echo '>>> [1/6] 安装依赖...'
+            echo '=== [1/6] 安装依赖 ==='
             apt-get update
             apt-get install -y build-essential cmake git wget file grep findutils sed \
                 qt5-default qttools5-dev-tools qttools5-dev libqt5x11extras5-dev \
@@ -33,7 +33,7 @@ jobs:
                 libv4l-dev \
                 squashfs-tools
 
-            echo '>>> [2/6] 编译 SimpleScreenRecorder...'
+            echo '=== [2/6] 编译 SSR ==='
             cd /work
             rm -rf ssr
             git clone https://github.com/MaartenBaert/ssr.git
@@ -41,91 +41,124 @@ jobs:
             mkdir build && cd build
             
             cmake .. \
-                -DCMAKE_INSTALL_PREFIX=/AppDir/usr \
+                -DCMAKE_INSTALL_PREFIX=/usr \
                 -DCMAKE_BUILD_TYPE=Release \
                 -DWITH_GLINJECT=OFF \
                 -DWITH_PIPEWIRE=OFF \
                 -DWITH_QT5=ON
             
             make -j\$(nproc)
-            make install
+            make install DESTDIR=/AppDir
             
-            echo '>>> [3/6] 准备打包工具...'
+            echo '=== [3/6] 准备打包工具 ==='
             cd /work
-            wget -c https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-aarch64.AppImage
-            wget -c https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-aarch64.AppImage
-            chmod +x linuxdeploy*.AppImage
-            
-            # 使用官方解压参数，更稳定
+            wget -nv https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-aarch64.AppImage
+            chmod +x linuxdeploy-aarch64.AppImage
+            # 解压 linuxdeploy
             ./linuxdeploy-aarch64.AppImage --appimage-extract
             mv squashfs-root linuxdeploy-root
+            chmod +x linuxdeploy-root/AppRun
+
+            echo '=== [4/6] 智能处理资源文件 ==='
             
-            ./linuxdeploy-plugin-qt-aarch64.AppImage --appimage-extract
-            mv squashfs-root linuxdeploy-qt-plugin
-            
-            # 安装二进制文件到 /usr/bin (注意路径变化)
-            cp linuxdeploy-root/usr/bin/linuxdeploy /usr/bin/linuxdeploy
-            cp linuxdeploy-qt-plugin/usr/bin/linuxdeploy-plugin-qt /usr/bin/linuxdeploy-plugin-qt
-            chmod +x /usr/bin/linuxdeploy /usr/bin/linuxdeploy-plugin-qt
-            
-            # 验证插件存在
-            ls -l /usr/bin/linuxdeploy*
-            
-            echo '>>> [4/6] 暴力打包 (缺什么补什么)...'
-            export QMAKE=/usr/bin/qmake
-            export QT_PLUGIN_PATH=/usr/lib/aarch64-linux-gnu/qt5/plugins/
-            export LD_LIBRARY_PATH=/usr/lib:/usr/local/lib
-            
-            # 1. 寻找或伪造 Desktop 文件
+            # --- 1. 处理 Desktop 文件 ---
+            # 先在安装目录找
             DESKTOP_FILE=\$(find /AppDir -name \"*.desktop\" | head -n 1)
             
+            # 如果没找到，手写一个
             if [ -z \"\$DESKTOP_FILE\" ]; then
-                echo \"⚠️ 没找到 Desktop 文件，正在手写一个...\"
+                echo \"⚠️ 未找到 Desktop 文件，正在生成默认文件...\"
                 mkdir -p /AppDir/usr/share/applications
                 DESKTOP_FILE=\"/AppDir/usr/share/applications/ssr.desktop\"
                 
-                echo \"[Desktop Entry]\" > \$DESKTOP_FILE
-                echo \"Type=Application\" >> \$DESKTOP_FILE
-                echo \"Name=SimpleScreenRecorder\" >> \$DESKTOP_FILE
-                echo \"Exec=simplescreenrecorder\" >> \$DESKTOP_FILE
-                echo \"Icon=simplescreenrecorder\" >> \$DESKTOP_FILE
-                echo \"Categories=AudioVideo;Recorder;\" >> \$DESKTOP_FILE
+                # 注意：EOF 必须与 cat 对齐或使用 <<-EOF 忽略缩进
+                cat > \$DESKTOP_FILE <<EOF
+[Desktop Entry]
+Type=Application
+Name=SimpleScreenRecorder
+GenericName=Screen Recorder
+Comment=A feature-rich screen recorder that supports X11 and OpenGL
+Keywords=screen;recorder;capture;grab;
+Exec=simplescreenrecorder
+Icon=simplescreenrecorder
+Terminal=false
+Categories=AudioVideo;Video;Recorder;Qt;
+EOF
             fi
-            
-            # 2. 寻找或随便抓一个 Icon 文件
-            ICON_FILE=\$(find /AppDir -name \"*.png\" | head -n 1)
-            
-            if [ -z \"\$ICON_FILE\" ]; then
-                 echo \"⚠️ 连图标都没找到？生成一个空的图片文件...\"
-                 touch /AppDir/dummy_icon.png
-                 ICON_FILE=\"/AppDir/dummy_icon.png\"
-            fi
-            
-            echo \"DEBUG: Using Desktop: \$DESKTOP_FILE\"
-            echo \"DEBUG: Using Icon: \$ICON_FILE\"
+            echo \"✅ 使用 Desktop 文件: \$DESKTOP_FILE\"
 
-            # 运行打包
-            linuxdeploy \
-              --appdir=\"/AppDir\" \
-              --desktop-file=\"\$DESKTOP_FILE\" \
-              --icon-file=\"\$ICON_FILE\" \
-              --plugin=qt
+            # --- 2. 处理图标文件 ---
+            # 策略：安装目录 -> 源码目录 -> 官方仓库下载
             
-            echo '>>> [5/6] 注入运行库 & 启动脚本...'
+            # 尝试找安装好的图标
+            ICON_FILE=\$(find /AppDir -name \"simplescreenrecorder.svg\" -o -name \"simplescreenrecorder.png\" | head -n 1)
+            
+            # 没找到？去源码目录(/work/ssr)找
+            if [ -z \"\$ICON_FILE\" ]; then
+                echo \"⚠️ 安装目录无图标，尝试从源码提取...\"
+                ICON_FILE=\$(find /work/ssr -name \"icon.svg\" -o -name \"simplescreenrecorder.svg\" | head -n 1)
+            fi
+            
+            # 还没找到？直接从 GitHub 下载官方图标 (保底策略)
+            if [ -z \"\$ICON_FILE\" ]; then
+                echo \"⚠️ 源码也没图标？尝试在线下载...\"
+                wget -O /tmp/ssr_icon.svg https://raw.githubusercontent.com/MaartenBaert/ssr/master/data/resources/icon.svg
+                ICON_FILE=\"/tmp/ssr_icon.svg\"
+            fi
+            
+            echo \"✅ 使用图标文件: \$ICON_FILE\"
+
+            # --- 3. 运行 LinuxDeploy 归档 ---
+            ./linuxdeploy-root/AppRun \
+              --appdir /AppDir \
+              --desktop-file \"\$DESKTOP_FILE\" \
+              --icon-file \"\$ICON_FILE\" \
+              --executable /AppDir/usr/bin/simplescreenrecorder
+            
+            echo '=== [5/6] 注入依赖库 ==='
+            # 1. 注入 Qt 插件
+            mkdir -p /AppDir/usr/plugins
+            cp -r /usr/lib/aarch64-linux-gnu/qt5/plugins/* /AppDir/usr/plugins/
+            
+            # 2. 注入依赖 (ldd)
+            mkdir -p /AppDir/usr/lib
+            
+            copy_deps() {
+                local binary=\$1
+                deps=\$(ldd \"\$binary\" | grep \"=> /\" | awk '{print \$3}' | grep -vE \"ld-linux|vdso\")
+                for lib in \$deps; do
+                    libname=\$(basename \"\$lib\")
+                    if [ ! -f \"/AppDir/usr/lib/\$libname\" ]; then
+                        cp \"\$lib\" \"/AppDir/usr/lib/\"
+                    fi
+                done
+            }
+            
+            copy_deps /AppDir/usr/bin/simplescreenrecorder
+            
+            # 递归处理插件依赖
+            find /AppDir/usr/plugins -name \"*.so\" | while read plugin; do
+                copy_deps \"\$plugin\"
+            done
+            
+            # 3. 注入基础库
             cp /usr/lib/aarch64-linux-gnu/libstdc++.so.6 /AppDir/usr/lib/
             cp /lib/aarch64-linux-gnu/libgcc_s.so.1 /AppDir/usr/lib/
 
+            echo '=== [6/6] 打包 ==='
             rm -f /AppDir/AppRun
-            touch /AppDir/AppRun
-            echo '#!/bin/bash' >> /AppDir/AppRun
-            echo 'SELF=\$(readlink -f \"\$0\")' >> /AppDir/AppRun
-            echo 'HERE=\${SELF%/*}' >> /AppDir/AppRun
-            echo 'export LD_LIBRARY_PATH=\${HERE}/usr/lib:\$LD_LIBRARY_PATH' >> /AppDir/AppRun
-            echo 'export QT_PLUGIN_PATH=\${HERE}/usr/plugins' >> /AppDir/AppRun
-            echo 'exec \${HERE}/usr/bin/simplescreenrecorder \"\$@\"' >> /AppDir/AppRun
+            
+            cat > /AppDir/AppRun <<EOF
+#!/bin/bash
+SELF=\$(readlink -f \"\$0\")
+HERE=\${SELF%/*}
+export LD_LIBRARY_PATH=\"\${HERE}/usr/lib:\$LD_LIBRARY_PATH\"
+export QT_PLUGIN_PATH=\"\${HERE}/usr/plugins\"
+export QT_QPA_PLATFORM_PLUGIN_PATH=\"\${HERE}/usr/plugins/platforms\"
+exec \"\${HERE}/usr/bin/simplescreenrecorder\" \"\$@\"
+EOF
             chmod +x /AppDir/AppRun
             
-            echo '>>> [6/6] 压缩...'
             mv /AppDir SSR-ARM64-Portable
             tar -czvf SSR-ARM64-Portable.tar.gz SSR-ARM64-Portable/
             
