@@ -1,4 +1,4 @@
-name: Build SSR ARM64 (Hybrid Auto-Gen)
+name: Build SSR ARM64 (Safe Echo)
 
 on: workflow_dispatch
 
@@ -55,33 +55,31 @@ jobs:
             wget -nv https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-aarch64.AppImage
             chmod +x linuxdeploy-aarch64.AppImage
             
-            # 使用 unsquashfs 强制解压，避开 Exec format error
+            # 使用 unsquashfs 强制解压
             OFFSET=\$(grep -aob \"hsqs\" linuxdeploy-aarch64.AppImage | head -n 1 | cut -d: -f1)
             unsquashfs -o \$OFFSET -d linuxdeploy-root linuxdeploy-aarch64.AppImage
             chmod +x linuxdeploy-root/AppRun
 
             echo '=== [4/6] 智能处理资源文件 ==='
             
-            # --- 1. 处理 Desktop 文件 ---
+            # --- 1. 处理 Desktop 文件 (改用 echo 防止 EOF 错误) ---
             DESKTOP_FILE=\$(find /AppDir -name \"*.desktop\" | head -n 1)
             
             if [ -z \"\$DESKTOP_FILE\" ]; then
-                echo \"⚠️ 未找到 Desktop 文件，生成默认文件...\"
+                echo \"⚠️ 生成默认 Desktop 文件...\"
                 mkdir -p /AppDir/usr/share/applications
                 DESKTOP_FILE=\"/AppDir/usr/share/applications/ssr.desktop\"
                 
-                cat > \$DESKTOP_FILE <<EOF
-                [Desktop Entry]
-                Type=Application
-                Name=SimpleScreenRecorder
-                GenericName=Screen Recorder
-                Comment=A feature-rich screen recorder that supports X11 and OpenGL
-                Keywords=screen;recorder;capture;grab;
-                Exec=simplescreenrecorder
-                Icon=simplescreenrecorder
-                Terminal=false
-                Categories=AudioVideo;Video;Recorder;Qt;
-                EOF
+                echo '[Desktop Entry]' > \$DESKTOP_FILE
+                echo 'Type=Application' >> \$DESKTOP_FILE
+                echo 'Name=SimpleScreenRecorder' >> \$DESKTOP_FILE
+                echo 'GenericName=Screen Recorder' >> \$DESKTOP_FILE
+                echo 'Comment=A feature-rich screen recorder' >> \$DESKTOP_FILE
+                echo 'Keywords=screen;recorder;capture;grab;' >> \$DESKTOP_FILE
+                echo 'Exec=simplescreenrecorder' >> \$DESKTOP_FILE
+                echo 'Icon=simplescreenrecorder' >> \$DESKTOP_FILE
+                echo 'Terminal=false' >> \$DESKTOP_FILE
+                echo 'Categories=AudioVideo;Video;Recorder;Qt;' >> \$DESKTOP_FILE
             fi
             echo \"✅ 使用 Desktop 文件: \$DESKTOP_FILE\"
 
@@ -89,19 +87,18 @@ jobs:
             ICON_FILE=\$(find /AppDir -name \"simplescreenrecorder.svg\" -o -name \"simplescreenrecorder.png\" | head -n 1)
             
             if [ -z \"\$ICON_FILE\" ]; then
-                echo \"⚠️ 安装目录无图标，尝试从源码提取...\"
+                echo \"⚠️ 尝试从源码提取图标...\"
                 ICON_FILE=\$(find /work/ssr -name \"icon.svg\" -o -name \"simplescreenrecorder.svg\" | head -n 1)
             fi
             
             if [ -z \"\$ICON_FILE\" ]; then
-                echo \"⚠️ 尝试在线下载图标...\"
+                echo \"⚠️ 在线下载图标...\"
                 wget -O /tmp/ssr_icon.svg https://raw.githubusercontent.com/MaartenBaert/ssr/master/data/resources/icon.svg
                 ICON_FILE=\"/tmp/ssr_icon.svg\"
             fi
             echo \"✅ 使用图标文件: \$ICON_FILE\"
 
             # --- 3. 运行 LinuxDeploy 归档 ---
-            # AppRun 是个 shell 脚本，可以直接运行
             ./linuxdeploy-root/AppRun \
               --appdir /AppDir \
               --desktop-file \"\$DESKTOP_FILE\" \
@@ -114,6 +111,7 @@ jobs:
             
             mkdir -p /AppDir/usr/lib
             
+            # 定义依赖抓取函数
             copy_deps() {
                 local binary=\$1
                 deps=\$(ldd \"\$binary\" | grep \"=> /\" | awk '{print \$3}' | grep -vE \"ld-linux|vdso\")
@@ -137,15 +135,16 @@ jobs:
             echo '=== [6/6] 打包 ==='
             rm -f /AppDir/AppRun
             
-            cat > /AppDir/AppRun <<EOF
-                #!/bin/bash
-                SELF=\$(readlink -f \"\$0\")
-                HERE=\${SELF%/*}
-                export LD_LIBRARY_PATH=\"\${HERE}/usr/lib:\$LD_LIBRARY_PATH\"
-                export QT_PLUGIN_PATH=\"\${HERE}/usr/plugins\"
-                export QT_QPA_PLATFORM_PLUGIN_PATH=\"\${HERE}/usr/plugins/platforms\"
-                exec \"\${HERE}/usr/bin/simplescreenrecorder\" \"\$@\"
-                EOF
+            # --- 生成启动脚本 (改用 echo 防止 EOF 错误) ---
+            touch /AppDir/AppRun
+            echo '#!/bin/bash' > /AppDir/AppRun
+            echo 'SELF=$(readlink -f "$0")' >> /AppDir/AppRun
+            echo 'HERE=${SELF%/*}' >> /AppDir/AppRun
+            echo 'export LD_LIBRARY_PATH="${HERE}/usr/lib:$LD_LIBRARY_PATH"' >> /AppDir/AppRun
+            echo 'export QT_PLUGIN_PATH="${HERE}/usr/plugins"' >> /AppDir/AppRun
+            echo 'export QT_QPA_PLATFORM_PLUGIN_PATH="${HERE}/usr/plugins/platforms"' >> /AppDir/AppRun
+            echo 'exec "${HERE}/usr/bin/simplescreenrecorder" "$@"' >> /AppDir/AppRun
+            
             chmod +x /AppDir/AppRun
             
             mv /AppDir SSR-ARM64-Portable
@@ -153,6 +152,7 @@ jobs:
             
             ls -lh SSR-ARM64-Portable.tar.gz
           "
+
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
