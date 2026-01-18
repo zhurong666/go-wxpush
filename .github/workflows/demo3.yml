@@ -56,18 +56,23 @@ jobs:
             wget -c https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-aarch64.AppImage
             chmod +x linuxdeploy*.AppImage
             
-            # 手动解压
-            OFFSET=\$(grep -aob \"hsqs\" linuxdeploy-aarch64.AppImage | head -n 1 | cut -d: -f1)
-            unsquashfs -o \$OFFSET -d linuxdeploy-root linuxdeploy-aarch64.AppImage
+            # 使用官方解压参数，更稳定
+            ./linuxdeploy-aarch64.AppImage --appimage-extract
+            mv squashfs-root linuxdeploy-root
             
-            OFFSET=\$(grep -aob \"hsqs\" linuxdeploy-plugin-qt-aarch64.AppImage | head -n 1 | cut -d: -f1)
-            unsquashfs -o \$OFFSET -d linuxdeploy-qt-plugin linuxdeploy-plugin-qt-aarch64.AppImage
+            ./linuxdeploy-plugin-qt-aarch64.AppImage --appimage-extract
+            mv squashfs-root linuxdeploy-qt-plugin
             
-            # 移动插件并删除源文件
-            mv linuxdeploy-qt-plugin/AppRun /usr/bin/linuxdeploy-plugin-qt
-            rm -f /work/*.AppImage
+            # 安装二进制文件到 /usr/bin (注意路径变化)
+            cp linuxdeploy-root/usr/bin/linuxdeploy /usr/bin/linuxdeploy
+            cp linuxdeploy-qt-plugin/usr/bin/linuxdeploy-plugin-qt /usr/bin/linuxdeploy-plugin-qt
+            chmod +x /usr/bin/linuxdeploy /usr/bin/linuxdeploy-plugin-qt
+            
+            # 验证插件存在
+            ls -l /usr/bin/linuxdeploy*
             
             echo '>>> [4/6] 暴力打包 (缺什么补什么)...'
+            export QMAKE=/usr/bin/qmake
             export QT_PLUGIN_PATH=/usr/lib/aarch64-linux-gnu/qt5/plugins/
             export LD_LIBRARY_PATH=/usr/lib:/usr/local/lib
             
@@ -79,7 +84,6 @@ jobs:
                 mkdir -p /AppDir/usr/share/applications
                 DESKTOP_FILE=\"/AppDir/usr/share/applications/ssr.desktop\"
                 
-                # 手写一个最简配置
                 echo \"[Desktop Entry]\" > \$DESKTOP_FILE
                 echo \"Type=Application\" >> \$DESKTOP_FILE
                 echo \"Name=SimpleScreenRecorder\" >> \$DESKTOP_FILE
@@ -89,7 +93,6 @@ jobs:
             fi
             
             # 2. 寻找或随便抓一个 Icon 文件
-            # 只要是 png 无论是干嘛的，先拿来用，防止报错
             ICON_FILE=\$(find /AppDir -name \"*.png\" | head -n 1)
             
             if [ -z \"\$ICON_FILE\" ]; then
@@ -102,7 +105,7 @@ jobs:
             echo \"DEBUG: Using Icon: \$ICON_FILE\"
 
             # 运行打包
-            ./linuxdeploy-root/AppRun \
+            linuxdeploy \
               --appdir=\"/AppDir\" \
               --desktop-file=\"\$DESKTOP_FILE\" \
               --icon-file=\"\$ICON_FILE\" \
