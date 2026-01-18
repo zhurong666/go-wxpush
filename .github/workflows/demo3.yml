@@ -73,17 +73,17 @@ jobs:
                 
                 # 注意：EOF 必须与 cat 对齐或使用 <<-EOF 忽略缩进
                 cat > \$DESKTOP_FILE <<EOF
-[Desktop Entry]
-Type=Application
-Name=SimpleScreenRecorder
-GenericName=Screen Recorder
-Comment=A feature-rich screen recorder that supports X11 and OpenGL
-Keywords=screen;recorder;capture;grab;
-Exec=simplescreenrecorder
-Icon=simplescreenrecorder
-Terminal=false
-Categories=AudioVideo;Video;Recorder;Qt;
-EOF
+                  [Desktop Entry]
+                  Type=Application
+                  Name=SimpleScreenRecorder
+                  GenericName=Screen Recorder
+                  Comment=A feature-rich screen recorder that supports X11 and OpenGL
+                  Keywords=screen;recorder;capture;grab;
+                  Exec=simplescreenrecorder
+                  Icon=simplescreenrecorder
+                  Terminal=false
+                  Categories=AudioVideo;Video;Recorder;Qt;
+                  EOF
             fi
             echo \"✅ 使用 Desktop 文件: \$DESKTOP_FILE\"
 
@@ -149,14 +149,14 @@ EOF
             rm -f /AppDir/AppRun
             
             cat > /AppDir/AppRun <<EOF
-#!/bin/bash
-SELF=\$(readlink -f \"\$0\")
-HERE=\${SELF%/*}
-export LD_LIBRARY_PATH=\"\${HERE}/usr/lib:\$LD_LIBRARY_PATH\"
-export QT_PLUGIN_PATH=\"\${HERE}/usr/plugins\"
-export QT_QPA_PLATFORM_PLUGIN_PATH=\"\${HERE}/usr/plugins/platforms\"
-exec \"\${HERE}/usr/bin/simplescreenrecorder\" \"\$@\"
-EOF
+              #!/bin/bash
+              SELF=\$(readlink -f \"\$0\")
+              HERE=\${SELF%/*}
+              export LD_LIBRARY_PATH=\"\${HERE}/usr/lib:\$LD_LIBRARY_PATH\"
+              export QT_PLUGIN_PATH=\"\${HERE}/usr/plugins\"
+              export QT_QPA_PLATFORM_PLUGIN_PATH=\"\${HERE}/usr/plugins/platforms\"
+              exec \"\${HERE}/usr/bin/simplescreenrecorder\" \"\$@\"
+              EOF
             chmod +x /AppDir/AppRun
             
             mv /AppDir SSR-ARM64-Portable
