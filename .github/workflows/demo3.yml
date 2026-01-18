@@ -1,4 +1,19 @@
-- name: Build and Package
+name: Build SSR ARM64 (Hybrid Auto-Gen)
+
+on: workflow_dispatch
+
+jobs:
+  build-tarball:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+        with:
+          platforms: linux/arm64
+
+      - name: Build and Package
         run: |
           docker run --rm --platform linux/arm64 \
           -v ${{ github.workspace }}:/work \
@@ -56,17 +71,17 @@
                 DESKTOP_FILE=\"/AppDir/usr/share/applications/ssr.desktop\"
                 
                 cat > \$DESKTOP_FILE <<EOF
-          [Desktop Entry]
-          Type=Application
-          Name=SimpleScreenRecorder
-          GenericName=Screen Recorder
-          Comment=A feature-rich screen recorder that supports X11 and OpenGL
-          Keywords=screen;recorder;capture;grab;
-          Exec=simplescreenrecorder
-          Icon=simplescreenrecorder
-          Terminal=false
-          Categories=AudioVideo;Video;Recorder;Qt;
-          EOF
+                [Desktop Entry]
+                Type=Application
+                Name=SimpleScreenRecorder
+                GenericName=Screen Recorder
+                Comment=A feature-rich screen recorder that supports X11 and OpenGL
+                Keywords=screen;recorder;capture;grab;
+                Exec=simplescreenrecorder
+                Icon=simplescreenrecorder
+                Terminal=false
+                Categories=AudioVideo;Video;Recorder;Qt;
+                EOF
             fi
             echo \"✅ 使用 Desktop 文件: \$DESKTOP_FILE\"
 
@@ -123,14 +138,14 @@
             rm -f /AppDir/AppRun
             
             cat > /AppDir/AppRun <<EOF
-          #!/bin/bash
-          SELF=\$(readlink -f \"\$0\")
-          HERE=\${SELF%/*}
-          export LD_LIBRARY_PATH=\"\${HERE}/usr/lib:\$LD_LIBRARY_PATH\"
-          export QT_PLUGIN_PATH=\"\${HERE}/usr/plugins\"
-          export QT_QPA_PLATFORM_PLUGIN_PATH=\"\${HERE}/usr/plugins/platforms\"
-          exec \"\${HERE}/usr/bin/simplescreenrecorder\" \"\$@\"
-          EOF
+                #!/bin/bash
+                SELF=\$(readlink -f \"\$0\")
+                HERE=\${SELF%/*}
+                export LD_LIBRARY_PATH=\"\${HERE}/usr/lib:\$LD_LIBRARY_PATH\"
+                export QT_PLUGIN_PATH=\"\${HERE}/usr/plugins\"
+                export QT_QPA_PLATFORM_PLUGIN_PATH=\"\${HERE}/usr/plugins/platforms\"
+                exec \"\${HERE}/usr/bin/simplescreenrecorder\" \"\$@\"
+                EOF
             chmod +x /AppDir/AppRun
             
             mv /AppDir SSR-ARM64-Portable
@@ -138,3 +153,8 @@
             
             ls -lh SSR-ARM64-Portable.tar.gz
           "
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SSR-ARM64-Portable
+          path: SSR-ARM64-Portable.tar.gz
