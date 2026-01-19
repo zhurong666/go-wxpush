@@ -1,4 +1,4 @@
-name: Download Fix-Font Packages (Fast & Furious)
+name: Download Fix-Font Packages (Smart Dependency)
 
 on: workflow_dispatch
 
@@ -19,57 +19,33 @@ jobs:
           -v ${{ github.workspace }}:/work \
           condaforge/miniforge3:latest /bin/bash -c "
             
-            set -e
+            # 遇到错误继续执行(为了方便调试输出)，但关键步骤即使失败也要看到日志
+            set -x 
             
-            echo '=== [1/5] 准备下载目录 ==='
+            echo '=== [1/5] 初始化环境 ==='
             mkdir -p /work/offline_pkgs
             export CONDA_PKGS_DIRS=/work/offline_pkgs
             
-            # 配置频道
+            # 强制清理缓存，防止 QEMU 网络导致的 repodata 损坏
+            conda clean --all --yes
+            
             conda config --add channels conda-forge
             conda config --set channel_priority strict
             
-            echo '=== [2/5] 极速提取 Tcl URL (No Python) ==='
-            cd /work/offline_pkgs
+            echo '=== [2/5] 更新索引 (Debug) ==='
+            # 先尝试搜索一下 tk，确保 repo data 下载成功
+            # 如果这一步失败，说明网络通达性有问题
+            conda search 'tk>=8.6' --info | head -n 20
             
-            # 1. 缩小搜索范围 (只搜 8.6 以上)，减少数据量，防止 QEMU 假死
-            # 2. 直接用 grep 提取 https 链接，不用 python json.load
-            echo '正在检索 Tcl (Raw Text Mode)...'
+            echo '=== [3/5] 下载包 (利用依赖链) ==='
+            # 策略：
+            # 1. 不指定 tcl，只指定 tk=8.6.*。
+            # 2. Conda 解析 tk 依赖时，会自动把 tcl (通常是 8.6.13) 加入下载列表。
+            # 3. 加上 --no-deps 是错误的，我们要 deps！所以去掉 --no-deps (默认就是有 deps)
             
-            # 尝试动态搜索，如果失败则使用硬编码链接
-            if conda search 'conda-forge::tcl[version=\">=8.6\"]' --subdir linux-aarch64 --json > tcl_raw.json; then
-                echo '搜索完成，正在提取链接...'
-                # 使用 grep 抓取 url 字段，用 tail 取最后一个 (最新版)，用 cut/sed 清洗引号
-                # 兼容 .conda 和 .tar.bz2
-                TCL_URL=\$(grep -o '\"url\": \"https://.*\"' tcl_raw.json | tail -n 1 | cut -d '\"' -f 4)
-            else
-                echo '⚠️ 搜索超时或失败，使用备用链接...'
-                TCL_URL=\"\"
-            fi
-            
-            # 保底逻辑：如果上面没提取到，或者为空，直接使用这个已知的 ARM64 链接
-            if [ -z \"\$TCL_URL\" ]; then
-                echo '⚠️ 未能提取到动态链接，使用 Hardcoded 链接'
-                TCL_URL=\"https://conda.anaconda.org/conda-forge/linux-aarch64/tcl-8.6.13-h76f30a9_0.conda\"
-            fi
-            
-            echo \"-> 目标链接: \$TCL_URL\"
-            
-            # 3. 下载
-            wget -nv \"\$TCL_URL\"
-            
-            if ls tcl-*.conda 1> /dev/null 2>&1 || ls tcl-*.tar.bz2 1> /dev/null 2>&1; then
-                echo \"✅ Tcl 下载成功！\"
-            else
-                echo \"❌ Tcl 下载严重失败！\"
-                exit 1
-            fi
-            
-            echo '=== [3/5] 下载 Tk & 依赖 (Force Xft) ==='
-            # 这里的依赖全家桶会逼迫 conda 下载正确的 tk
-            conda create -n temp_env \
+            conda create -n download_env \
                 python=3.11 \
-                tk=8.6.* \
+                'tk=8.6.*' \
                 xorg-libxft \
                 cairo \
                 pango \
@@ -77,50 +53,52 @@ jobs:
                 --download-only \
                 --yes
             
-            echo '=== [4/5] 清理与整理 ==='
-            cd /work/offline_pkgs
-            rm -rf *.lock urls.txt *.json info/ ../tcl_raw.json
+            echo '=== [4/5] 验证下载内容 ==='
+            ls -lh /work/offline_pkgs/
             
-            echo '生成安装脚本...'
+            # 检查是否有 tcl 包
+            if ls /work/offline_pkgs/tcl-*.conda 1> /dev/null 2>&1 || ls /work/offline_pkgs/tcl-*.tar.bz2 1> /dev/null 2>&1; then
+                echo '✅ 成功：Tcl 已被自动下载！'
+            else
+                echo '❌ 失败：依然没有 Tcl 包，正在强制尝试单独下载...'
+                # 最后的保底：如果依赖解析没拉下来，直接用 URL 下载最新的 ARM64 TCL
+                # 这是 Conda-forge 目前的固定地址 (8.6.13)
+                wget -P /work/offline_pkgs https://conda.anaconda.org/conda-forge/linux-aarch64/tcl-8.6.13-h76f30a9_0.conda
+            fi
+
+            echo '=== [5/5] 生成安装脚本并打包 ==='
+            cd /work/offline_pkgs
+            rm -rf *.lock urls.txt *.json info/
             
             echo '#!/bin/bash' > install_fix.sh
-            echo 'echo \"=== 开始离线修复 (Fast Mode) ===\"' >> install_fix.sh
+            echo 'set -e' >> install_fix.sh
+            echo 'echo \"=== 离线安装 (Smart Mode) ===\"' >> install_fix.sh
             
-            # 1. 安装 Tcl
+            # 1. 安装 Tcl (通配符匹配)
             echo 'echo \"-> 安装 Tcl...\"' >> install_fix.sh
-            echo 'find . -maxdepth 1 -name \"tcl-*\" | xargs -I {} conda install --offline --no-deps --force-reinstall {}' >> install_fix.sh
+            echo 'find . -maxdepth 1 -name \"tcl-*\" | head -n 1 | xargs -I {} conda install --offline --no-deps --force-reinstall {}' >> install_fix.sh
             
-            # 2. 安装 Tk (排除 noxft)
+            # 2. 安装 Tk
             echo 'echo \"-> 安装 Tk...\"' >> install_fix.sh
-            echo 'find . -maxdepth 1 -name \"tk-*\" | grep -v \"noxft\" | xargs -I {} conda install --offline --no-deps --force-reinstall {}' >> install_fix.sh
+            echo 'find . -maxdepth 1 -name \"tk-*\" | grep -v \"noxft\" | head -n 1 | xargs -I {} conda install --offline --no-deps --force-reinstall {}' >> install_fix.sh
             
-            # 3. 安装图形依赖
-            echo 'echo \"-> 安装图形依赖...\"' >> install_fix.sh
-            echo 'find . -maxdepth 1 -name \"xorg-libxft-*\" -o -name \"cairo-*\" -o -name \"pango-*\" | xargs -I {} conda install --offline --no-deps --force-reinstall {}' >> install_fix.sh
-
-            # 4. 安装其他依赖
-            echo 'echo \"-> 安装其他依赖...\"' >> install_fix.sh
-            echo 'for pkg in *; do' >> install_fix.sh
-            echo '    if [[ \"\$pkg\" == *.tar.bz2 ]] || [[ \"\$pkg\" == *.conda ]]; then' >> install_fix.sh
-            echo '        if [[ \"\$pkg\" != tk-* ]] && [[ \"\$pkg\" != tcl-* ]] && [[ \"\$pkg\" != xorg-libxft-* ]] && [[ \"\$pkg\" != cairo-* ]] && [[ \"\$pkg\" != pango-* ]]; then' >> install_fix.sh
-            echo '            echo \"Installing \$pkg ...\"' >> install_fix.sh
-            echo '            conda install --offline \"\$pkg\"' >> install_fix.sh
-            echo '        fi' >> install_fix.sh
+            # 3. 批量安装其他
+            echo 'echo \"-> 安装剩余依赖...\"' >> install_fix.sh
+            echo 'for pkg in *.conda *.tar.bz2; do' >> install_fix.sh
+            echo '    if [[ \"\$pkg\" != tk-* ]] && [[ \"\$pkg\" != tcl-* ]]; then' >> install_fix.sh
+            echo '        echo \"Installing \$pkg ...\"' >> install_fix.sh
+            echo '        conda install --offline \"\$pkg\" || echo \"Warning: \$pkg failed\"' >> install_fix.sh
             echo '    fi' >> install_fix.sh
             echo 'done' >> install_fix.sh
             
-            echo 'echo \"=== 完成！请测试 import tkinter ===\"' >> install_fix.sh
-            
             chmod +x install_fix.sh
             
-            echo '正在打包...'
             cd /work
-            tar -czvf fix-font-packages-arm64-fast.tar.gz offline_pkgs/
-            ls -lh fix-font-packages-arm64-fast.tar.gz
+            tar -czvf fix-font-pkgs-auto.tar.gz offline_pkgs/
           "
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: fix-font-packages-arm64-fast
-          path: fix-font-packages-arm64-fast.tar.gz
+          name: fix-font-pkgs-auto
+          path: fix-font-pkgs-auto.tar.gz
