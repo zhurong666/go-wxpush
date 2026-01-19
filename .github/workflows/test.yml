@@ -1,4 +1,4 @@
-name: Download Fix-Font Packages (Range Spec)
+name: Download Fix-Font Packages (Brute Force)
 
 on: workflow_dispatch
 
@@ -21,23 +21,44 @@ jobs:
             
             set -e
             
-            echo '=== [1/4] 准备下载目录 ==='
+            echo '=== [1/5] 准备下载目录 ==='
             mkdir -p /work/offline_pkgs
             export CONDA_PKGS_DIRS=/work/offline_pkgs
             
-            echo '=== [2/4] 配置下载环境 ==='
+            # 配置频道
             conda config --add channels conda-forge
             conda config --set channel_priority strict
             
-            echo '=== [3/4] 开始下载 (Range Spec + Force Xft) ==='
-            # 策略升级：
-            # 1. 使用 >=8.6,<8.7 锁定主版本范围，解决 'not found' 问题
-            # 2. 显式要求 xorg-libxft/pango，逼迫解算器放弃 'noxft' 版 Tk
+            echo '=== [2/5] 暴力下载 Tcl (绕过 Solver) ==='
+            # 1. 使用 conda search 查找 linux-aarch64 下最新的 tcl 包信息 (JSON格式)
+            echo '正在检索 Tcl 版本信息...'
+            conda search 'conda-forge::tcl' --subdir linux-aarch64 --json > tcl_info.json
             
+            # 2. 使用 python 提取最新版本的下载 URL
+            # 逻辑：读取 JSON -> 找最后一个结果(最新版) -> 提取 url 字段
+            echo '正在解析下载链接...'
+            TCL_URL=\$(python -c \"import json; import sys; data = json.load(open('tcl_info.json')); print(data['tcl'][-1]['url'])\")
+            
+            echo \"-> 目标链接: \$TCL_URL\"
+            
+            # 3. 直接下载！
+            cd /work/offline_pkgs
+            wget -nv \"\$TCL_URL\"
+            
+            if ls tcl-*.conda 1> /dev/null 2>&1 || ls tcl-*.tar.bz2 1> /dev/null 2>&1; then
+                echo \"✅ Tcl 下载成功！\"
+            else
+                echo \"❌ Tcl 下载失败，正在尝试备用硬链接...\"
+                # 备用方案：如果上面解析失败，尝试下载一个已知存在的版本 (8.6.13)
+                wget -nv https://conda.anaconda.org/conda-forge/linux-aarch64/tcl-8.6.13-h76f30a9_0.conda
+            fi
+            
+            echo '=== [3/5] 下载 Tk (Force Xft) ==='
+            # 这里我们只下载 Tk 和图形库，Tcl 已经在上面搞定了
+            # 依然加上 xorg-libxft 防止下载到阉割版
             conda create -n temp_env \
                 python=3.11 \
-                'tk>=8.6,<8.7' \
-                'tcl>=8.6,<8.7' \
+                tk=8.6.* \
                 xorg-libxft \
                 cairo \
                 pango \
@@ -45,33 +66,33 @@ jobs:
                 --download-only \
                 --yes
             
-            echo '=== [4/4] 清理与整理 ==='
+            echo '=== [4/5] 清理与整理 ==='
             cd /work/offline_pkgs
-            rm -rf *.lock urls.txt *.json info/
+            rm -rf *.lock urls.txt *.json info/ ../tcl_info.json
             
             echo '生成安装脚本...'
             
-            # 使用 echo 生成脚本，避免 EOF 报错
+            # 使用 echo 生成安装脚本
             echo '#!/bin/bash' > install_fix.sh
-            echo 'echo \"=== 开始离线修复 (Range Version) ===\"' >> install_fix.sh
+            echo 'echo \"=== 开始离线修复 (Brute Force Mode) ===\"' >> install_fix.sh
             
-            # 1. 安装 Tcl
+            # 1. 安装 Tcl (必须第一个装)
             echo 'echo \"-> 安装 Tcl...\"' >> install_fix.sh
+            # 强制安装刚才 wget 下来的文件
             echo 'find . -maxdepth 1 -name \"tcl-*\" | xargs -I {} conda install --offline --no-deps --force-reinstall {}' >> install_fix.sh
             
-            # 2. 安装 Tk (确保非阉割版)
+            # 2. 安装 Tk (过滤掉 noxft)
             echo 'echo \"-> 安装 Tk...\"' >> install_fix.sh
             echo 'find . -maxdepth 1 -name \"tk-*\" | grep -v \"noxft\" | xargs -I {} conda install --offline --no-deps --force-reinstall {}' >> install_fix.sh
             
-            # 3. 安装图形底层依赖
-            echo 'echo \"-> 安装图形依赖 (Xft/Cairo/Pango)...\"' >> install_fix.sh
+            # 3. 安装图形依赖
+            echo 'echo \"-> 安装图形依赖...\"' >> install_fix.sh
             echo 'find . -maxdepth 1 -name \"xorg-libxft-*\" -o -name \"cairo-*\" -o -name \"pango-*\" | xargs -I {} conda install --offline --no-deps --force-reinstall {}' >> install_fix.sh
 
-            # 4. 安装其他所有依赖
+            # 4. 安装其他依赖
             echo 'echo \"-> 安装其他依赖...\"' >> install_fix.sh
             echo 'for pkg in *; do' >> install_fix.sh
             echo '    if [[ \"\$pkg\" == *.tar.bz2 ]] || [[ \"\$pkg\" == *.conda ]]; then' >> install_fix.sh
-            # 排除已安装的核心包
             echo '        if [[ \"\$pkg\" != tk-* ]] && [[ \"\$pkg\" != tcl-* ]] && [[ \"\$pkg\" != xorg-libxft-* ]] && [[ \"\$pkg\" != cairo-* ]] && [[ \"\$pkg\" != pango-* ]]; then' >> install_fix.sh
             echo '            echo \"Installing \$pkg ...\"' >> install_fix.sh
             echo '            conda install --offline \"\$pkg\"' >> install_fix.sh
@@ -85,12 +106,12 @@ jobs:
             
             echo '正在打包...'
             cd /work
-            tar -czvf fix-font-packages-arm64-range.tar.gz offline_pkgs/
-            ls -lh fix-font-packages-arm64-range.tar.gz
+            tar -czvf fix-font-packages-arm64-brute.tar.gz offline_pkgs/
+            ls -lh fix-font-packages-arm64-brute.tar.gz
           "
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: fix-font-packages-arm64-range
-          path: fix-font-packages-arm64-range.tar.gz
+          name: fix-font-packages-arm64-brute
+          path: fix-font-packages-arm64-brute.tar.gz
