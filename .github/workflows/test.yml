@@ -15,7 +15,6 @@ jobs:
 
       - name: Download Packages via Docker
         run: |
-          # 我们使用 Miniforge 镜像，因为它天生就是 conda-forge 源，且支持 ARM64
           docker run --rm --platform linux/arm64 \
           -v ${{ github.workspace }}:/work \
           condaforge/miniforge3:latest /bin/bash -c "
@@ -25,59 +24,63 @@ jobs:
             echo '=== [1/4] 准备下载目录 ==='
             mkdir -p /work/offline_pkgs
             
+            # --- 核心修正 ---
+            # 使用环境变量强制指定包的缓存目录
+            # 这样 Conda 下载的所有 tar.bz2 都会自动存到这个文件夹里
+            export CONDA_PKGS_DIRS=/work/offline_pkgs
+            
             echo '=== [2/4] 配置下载环境 ==='
-            # 确保只使用 conda-forge
             conda config --add channels conda-forge
             conda config --set channel_priority strict
             
-            # 创建一个临时的空环境路径，用于计算依赖
-            # 我们不真正安装到环境里，而是利用 --download-only 把包缓存下来
-            # 关键：指定 Python 版本！假设你的 UOS 也是 3.8 或 3.9，这里最好指定一下
-            # 如果不指定，它会下载最新的 Python 依赖。建议保持通用，或者你修改下面的 python=3.9
-            
-            echo '=== [3/4] 开始下载 (Tk fix + PyInstaller) ==='
-            # 说明：
-            # 1. tk=8.6.13: 强制指定新版
-            # 2. pyinstaller: 你需要的打包工具
-            # 3. --download-only: 只下载不安装
-            # 4. --pkgs-dirs: 指定下载存放的位置，方便我们打包
-            
+            echo '=== [3/4] 开始下载 ==='
+            # 重点：请确认这里的 python=3.9 是否与你内网一致
+            # 如果你内网是 3.11，请务必改为 python=3.11
             conda create -n temp_env \
-                python=3.11 \
+                python=3.9 \
                 tk=8.6.13 \
                 tcl=8.6.13 \
                 pyinstaller \
                 --download-only \
-                --pkgs-dirs /work/offline_pkgs \
                 --yes
             
             echo '=== [4/4] 清理与整理 ==='
             cd /work/offline_pkgs
             
-            # 删除 conda 的锁文件和无用文件
-            rm -f *.lock urls.txt
+            # 清理无用文件 (锁文件、解压后的临时目录等)
+            rm -rf *.lock urls.txt *.json info/
             
-            # 生成一个简易的安装脚本，方便你在离线机器上一键安装
+            # 为了防止打包过大，只保留压缩包文件 (.tar.bz2 或 .conda)
+            # 这一步不是必须的，但能让包更干净
+            
+            # 生成安装脚本
             cat > install_fix.sh <<EOF
             #!/bin/bash
-            # 自动离线安装脚本
-            echo '正在安装关键字体修复包 (Tk/Tcl)...'
-            conda install --offline tk-*.tar.bz2
-            conda install --offline tcl-*.tar.bz2
+            echo '=== 开始离线修复 ==='
             
-            echo '正在安装 PyInstaller 及其依赖...'
-            # 批量安装文件夹内所有包 (排除 tk/tcl 因为上面装过了，防止冲突，虽然重复装也没事)
-            # 为了安全，建议一个个装或者利用通配符
+            # 1. 优先强制安装 tk 和 tcl (字体修复核心)
+            # 使用 --no-deps 防止因为它找不到 python 而拒绝安装
+            # 使用 --force-reinstall 确保覆盖掉原来的阉割版
+            echo '-> 安装 Tk/Tcl...'
+            conda install --offline --no-deps --force-reinstall tk-*.tar.bz2
+            conda install --offline --no-deps --force-reinstall tcl-*.tar.bz2
+            
+            # 2. 安装剩余依赖 (PyInstaller 等)
+            echo '-> 安装其他依赖...'
             for pkg in *.tar.bz2 *.conda; do
-                conda install --offline \"\$pkg\"
+                # 简单的排除逻辑，防止重复安装上面两个
+                if [[ \"\$pkg\" != *\"tk-\"* ]] && [[ \"\$pkg\" != *\"tcl-\"* ]]; then
+                    conda install --offline \"\$pkg\"
+                fi
             done
             
-            echo '安装完成！请重新运行 Python 测试字体。'
+            echo '=== 完成！请测试 import tkinter ==='
             EOF
             chmod +x install_fix.sh
             
-            # 压缩
+            echo '正在打包...'
             cd /work
+            # 打包整个文件夹
             tar -czvf fix-font-packages-arm64.tar.gz offline_pkgs/
             ls -lh fix-font-packages-arm64.tar.gz
           "
