@@ -23,8 +23,6 @@ jobs:
             
             echo '=== [1/4] 准备下载目录 ==='
             mkdir -p /work/offline_pkgs
-            
-            # 强制指定包缓存路径
             export CONDA_PKGS_DIRS=/work/offline_pkgs
             
             echo '=== [2/4] 配置下载环境 ==='
@@ -32,13 +30,11 @@ jobs:
             conda config --set channel_priority strict
             
             echo '=== [3/4] 开始下载 ==='
-            # 修正策略：
-            # 1. 移除 tcl 显式约束，让 tk 自动拉取 ABI 匹配的 tcl 版本
-            # 2. 保留 tk=8.6.* 确保大版本正确
-            # 3. 请根据内网实际情况修改 python 版本 (如 python=3.11)
-            
+            # 1. 移除 tcl 约束，让 tk 自动拉取匹配版本
+            # 2. 保留 tk=8.6.*
+            # 3. 请确认 python 版本 (这里默认为 3.9)
             conda create -n temp_env \
-                python=3.9 \
+                python=3.11 \
                 tk=8.6.* \
                 pyinstaller \
                 --download-only \
@@ -46,37 +42,35 @@ jobs:
             
             echo '=== [4/4] 清理与整理 ==='
             cd /work/offline_pkgs
-            
-            # 清理非包文件
             rm -rf *.lock urls.txt *.json info/
             
-            # 生成增强版安装脚本
-            cat > install_fix.sh <<EOF
-            #!/bin/bash
-            echo '=== 开始离线修复 ==='
+            # --- 核心修复：改用 echo 生成脚本，彻底解决 EOF 报错 ---
+            echo '生成安装脚本...'
             
-            # 1. 优先强制安装 tk 和 tcl
-            # 修正：使用 tk-* 和 tcl-* 通配符，同时支持 .tar.bz2 和 .conda 格式
-            echo '-> 安装 Tk/Tcl (强制覆盖)...'
-            # 注意：这里利用 shell 扩展，如果没有对应文件会报错，但下载步骤保证了文件存在
-            find . -maxdepth 1 -name \"tk-*\" -o -name \"tcl-*\" | xargs -I {} conda install --offline --no-deps --force-reinstall {}
+            # 1. 写入文件头
+            echo '#!/bin/bash' > install_fix.sh
+            echo 'echo "=== 开始离线修复 ==="' >> install_fix.sh
             
-            # 2. 安装剩余依赖
-            echo '-> 安装其他依赖...'
-            # 遍历当前目录下的所有包文件
-            for pkg in *; do
-                # 简单的后缀检查，确保是 conda 包文件
-                if [[ \"\$pkg\" == *.tar.bz2 ]] || [[ \"\$pkg\" == *.conda ]]; then
-                    # 排除掉刚才已经装过的 tk 和 tcl，避免重复打印日志
-                    if [[ \"\$pkg\" != tk-* ]] && [[ \"\$pkg\" != tcl-* ]]; then
-                        echo \"Installing \$pkg ...\"
-                        conda install --offline \"\$pkg\"
-                    fi
-                fi
-            done
+            # 2. 写入 Tk/Tcl 强制安装逻辑
+            # 注意：使用单引号包裹命令，防止 \$ 被提前转义
+            echo 'echo "-> 安装 Tk/Tcl (强制覆盖)..."' >> install_fix.sh
+            echo 'find . -maxdepth 1 -name "tk-*" -o -name "tcl-*" | xargs -I {} conda install --offline --no-deps --force-reinstall {}' >> install_fix.sh
             
-            echo '=== 完成！请测试 import tkinter ==='
-            EOF
+            # 3. 写入剩余依赖安装逻辑
+            echo 'echo "-> 安装其他依赖..."' >> install_fix.sh
+            echo 'for pkg in *; do' >> install_fix.sh
+            echo '    # 检查后缀是否为 conda 包' >> install_fix.sh
+            echo '    if [[ "\$pkg" == *.tar.bz2 ]] || [[ "\$pkg" == *.conda ]]; then' >> install_fix.sh
+            echo '        # 排除已安装的 tk 和 tcl' >> install_fix.sh
+            echo '        if [[ "\$pkg" != tk-* ]] && [[ "\$pkg" != tcl-* ]]; then' >> install_fix.sh
+            echo '            echo "Installing \$pkg ..."' >> install_fix.sh
+            echo '            conda install --offline "\$pkg"' >> install_fix.sh
+            echo '        fi' >> install_fix.sh
+            echo '    fi' >> install_fix.sh
+            echo 'done' >> install_fix.sh
+            
+            echo 'echo "=== 完成！请测试 import tkinter ==="' >> install_fix.sh
+            
             chmod +x install_fix.sh
             
             echo '正在打包...'
