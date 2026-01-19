@@ -1,9 +1,9 @@
-name: Download Fix-Font Packages (Smart Dependency)
+name: Build Custom Miniconda (Uncastrated Tk)
 
 on: workflow_dispatch
 
 jobs:
-  download-packages:
+  build-installer:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -13,74 +13,61 @@ jobs:
         with:
           platforms: linux/arm64
 
-      - name: Download Packages via Docker
+      - name: Build Installer via Docker
         run: |
           docker run --rm --platform linux/arm64 \
           -v ${{ github.workspace }}:/work \
           condaforge/miniforge3:latest /bin/bash -c "
             
             set -e
+            echo '=== [1] 准备构建环境 ==='
+            # constructor 是用来制造安装包的工具
+            conda install -n base -c conda-forge constructor --yes
             
-            echo '=== [1] 准备环境 ==='
-            mkdir -p /work/offline_pkgs
-            export CONDA_PKGS_DIRS=/work/offline_pkgs
+            mkdir -p /work/build_dir
+            cd /work/build_dir
             
-            conda config --add channels conda-forge
-            conda config --set channel_priority strict
+            echo '=== [2] 定义 construct.yaml (构建蓝图) ==='
+            # 这是最关键的一步：我们在这里定义“完美环境”包含什么
             
-            echo '=== [2] 下载最新版依赖 (Correct Version Spec) ==='
+            cat <<EOF > construct.yaml
+            name: FixFontConda
+            version: 1.0.0
             
-            # 关键修正点：
-            # 1. 不要写 tcl=8.6 (这会导致找不到包)
-            # 2. 写 tcl=8.6.* (这表示 8.6 系列的任意版本，它会找到 8.6.13)
-            # 3. 同样的，tk=8.6.*
+            # 使用 conda-forge 频道，包最全
+            channels:
+              - conda-forge
             
-            conda create -n download_env \
-                python=3.11 \
-                'tk=8.6.*' \
-                'tcl=8.6.*' \
-                xorg-libxft \
-                cairo \
-                pango \
-                pyinstaller \
-                --download-only \
-                --yes
+            # 这是一个 ARM64 的安装包
+            specs:
+              - python=3.11
+              # 关键：指定版本范围，不要写死 8.6
+              - tk=8.6.*
+              - tcl=8.6.*
+              # 关键：显式加入 Xft 和 Cairo，逼迫 conda 选择支持 GUI 的 Tk 版本
+              - xorg-libxft
+              - cairo
+              - pango
+              # 你需要的其他包
+              - pyinstaller
+              # 基础工具
+              - pip
+              - wheel
             
-            echo '=== [3] 验证版本 ==='
-            cd /work/offline_pkgs
-            echo '下载到的 Tk 版本：'
-            ls tk-*.conda tk-*.tar.bz2 || echo 'Tk missing'
+            # 安装器设置
+            installer_filename: FixFontConda-Linux-aarch64.sh
+            EOF
             
-            echo '下载到的 Tcl 版本：'
-            ls tcl-*.conda tcl-*.tar.bz2 || echo 'Tcl missing'
+            echo '=== [3] 开始构建安装包 ==='
+            # constructor 会自动下载 ARM64 的包并打包成 .sh
+            constructor .
             
-            # 这里的检查确保我们要的是 8.6.1x (比如 8.6.13)，而不是老的 8.6.9
-            if ls tk-8.6.1* > /dev/null 2>&1; then
-                echo '✅ 完美：下载到了现代版本的 Tk (8.6.10+)'
-            else
-                echo '⚠️ 警告：下载的版本可能过旧，请检查日志'
-            fi
-
-            echo '=== [4] 打包 ==='
-            rm -rf *.lock urls.txt *.json info/
-            
-            # 生成简单的安装脚本
-            echo '#!/bin/bash' > install.sh
-            echo 'conda install --offline --no-deps *.conda *.tar.bz2' >> install.sh
-            chmod +x install.sh
-            
-            cd /work
-            tar -czvf fix-font-packages-correct-v2.tar.gz offline_pkgs/
+            echo '=== [4] 移动产物 ==='
+            mv FixFontConda-Linux-aarch64.sh /work/
           "
 
-      - name: Upload Artifact
+      - name: Upload Installer
         uses: actions/upload-artifact@v4
         with:
-          name: fix-font-packages-correct-v2
-          path: fix-font-packages-correct-v2.tar.gz
-
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: fix-font-pkgs-auto
-          path: fix-font-pkgs-auto.tar.gz
+          name: FixFontConda-Installer
+          path: FixFontConda-Linux-aarch64.sh
