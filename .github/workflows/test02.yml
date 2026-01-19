@@ -1,9 +1,9 @@
-name: Build Custom Miniconda (Uncastrated Tk)
+name: Download Fix-Font Packages (Strict Hash Match)
 
 on: workflow_dispatch
 
 jobs:
-  build-installer:
+  download-packages:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -13,62 +13,73 @@ jobs:
         with:
           platforms: linux/arm64
 
-      - name: Build Installer via Docker
+      - name: Download Packages via Docker
         run: |
           docker run --rm --platform linux/arm64 \
           -v ${{ github.workspace }}:/work \
           condaforge/miniforge3:latest /bin/bash -c "
             
+            set -x
             set -e
-            echo '=== [1] 准备构建环境 ==='
-            # 安装构建工具 constructor
-            conda install -n base -c conda-forge constructor --yes
             
-            mkdir -p /work/build_dir
-            cd /work/build_dir
+            echo '=== [1] 环境初始化 ==='
+            mkdir -p /work/offline_pkgs
+            export CONDA_PKGS_DIRS=/work/offline_pkgs
+            conda clean --all --yes
             
-            echo '=== [2] 定义 construct.yaml (Echo Mode) ==='
+            conda config --add channels conda-forge
+            conda config --set channel_priority strict
             
-            # 使用 echo 逐行写入，彻底避免 EOF 解析错误
-            # 注意：YAML 对缩进敏感，echo 里的空格必须保留
+            echo '=== [2] 下载包 (精确打击) ==='
             
-            echo 'name: FixFontConda' > construct.yaml
-            echo 'version: 1.0.0' >> construct.yaml
+            # 核心修改：
+            # tk=8.6.*=h* # 解释：
+            # 1. 版本必须是 8.6.x
+            # 2. Build String (文件名下划线后的部分) 必须以 'h' 开头
+            # 结果：
+            # ✅ 命中 tk-8.6.13-h194ca79_0.conda (以 h 开头)
+            # ❌ 排除 tk-8.6.13-noxft_... (以 n 开头)
             
-            echo 'channels:' >> construct.yaml
-            echo '  - conda-forge' >> construct.yaml
+            conda create -n download_env \
+                python=3.11 \
+                'tk=8.6.*=h*' \
+                xorg-libxft \
+                cairo \
+                pango \
+                pyinstaller \
+                --download-only \
+                --yes
             
-            echo 'specs:' >> construct.yaml
-            echo '  - python=3.11' >> construct.yaml
+            echo '=== [3] 最终核验 (Final Verification) ==='
+            cd /work/offline_pkgs
             
-            # 强制指定 Tk/Tcl 版本范围 (自动匹配最新的 8.6.13)
-            echo '  - tk=8.6.*' >> construct.yaml
-            echo '  - tcl=8.6.*' >> construct.yaml
+            # 检查是否下载到了正确的包
+            if ls tk-*.conda | grep -q 'noxft'; then
+                echo '❌ 严重失败：依然下载到了 noxft 包！'
+                ls -lh tk-*
+                exit 1
+            else
+                echo '✅ 验证通过：没有 noxft 包。'
+            fi
             
-            # 关键：显式加入图形库，防止被阉割
-            echo '  - xorg-libxft' >> construct.yaml
-            echo '  - cairo' >> construct.yaml
-            echo '  - pango' >> construct.yaml
+            # 打印下载到的 Tk 详细信息，让你放心
+            echo '-> 捕获到的 Tk 包：'
+            ls -lh tk-*.conda
             
-            # 工具包
-            echo '  - pyinstaller' >> construct.yaml
-            echo '  - pip' >> construct.yaml
-            echo '  - wheel' >> construct.yaml
+            echo '=== [4] 打包 ==='
+            rm -rf *.lock urls.txt *.json info/
             
-            echo 'installer_filename: FixFontConda-Linux-aarch64.sh' >> construct.yaml
+            echo '#!/bin/bash' > install.sh
+            echo 'echo \"=== 开始安装 (Verified GUI Version) ===\"' >> install.sh
+            echo 'conda install --offline --no-deps --force-reinstall *.conda *.tar.bz2' >> install.sh
+            chmod +x install.sh
             
-            echo '=== [3] 检查 YAML 内容 (Debug) ==='
-            cat construct.yaml
-            
-            echo '=== [4] 开始构建安装包 ==='
-            constructor .
-            
-            echo '=== [5] 移动产物 ==='
-            mv FixFontConda-Linux-aarch64.sh /work/
+            cd /work
+            tar -czvf fix-font-packages-verified-arm64.tar.gz offline_pkgs/
           "
 
-      - name: Upload Installer
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: FixFontConda-Installer
-          path: FixFontConda-Linux-aarch64.sh
+          name: fix-font-packages-verified-arm64
+          path: fix-font-packages-verified-arm64.tar.gz
