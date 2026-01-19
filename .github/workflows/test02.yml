@@ -21,48 +21,49 @@ jobs:
             
             set -e
             echo '=== [1] 准备构建环境 ==='
-            # constructor 是用来制造安装包的工具
+            # 安装构建工具 constructor
             conda install -n base -c conda-forge constructor --yes
             
             mkdir -p /work/build_dir
             cd /work/build_dir
             
-            echo '=== [2] 定义 construct.yaml (构建蓝图) ==='
-            # 这是最关键的一步：我们在这里定义“完美环境”包含什么
+            echo '=== [2] 定义 construct.yaml (Echo Mode) ==='
             
-            cat <<EOF > construct.yaml
-            name: FixFontConda
-            version: 1.0.0
+            # 使用 echo 逐行写入，彻底避免 EOF 解析错误
+            # 注意：YAML 对缩进敏感，echo 里的空格必须保留
             
-            # 使用 conda-forge 频道，包最全
-            channels:
-              - conda-forge
+            echo 'name: FixFontConda' > construct.yaml
+            echo 'version: 1.0.0' >> construct.yaml
             
-            # 这是一个 ARM64 的安装包
-            specs:
-              - python=3.11
-              # 关键：指定版本范围，不要写死 8.6
-              - tk=8.6.*
-              - tcl=8.6.*
-              # 关键：显式加入 Xft 和 Cairo，逼迫 conda 选择支持 GUI 的 Tk 版本
-              - xorg-libxft
-              - cairo
-              - pango
-              # 你需要的其他包
-              - pyinstaller
-              # 基础工具
-              - pip
-              - wheel
+            echo 'channels:' >> construct.yaml
+            echo '  - conda-forge' >> construct.yaml
             
-            # 安装器设置
-            installer_filename: FixFontConda-Linux-aarch64.sh
-            EOF
+            echo 'specs:' >> construct.yaml
+            echo '  - python=3.11' >> construct.yaml
             
-            echo '=== [3] 开始构建安装包 ==='
-            # constructor 会自动下载 ARM64 的包并打包成 .sh
+            # 强制指定 Tk/Tcl 版本范围 (自动匹配最新的 8.6.13)
+            echo '  - tk=8.6.*' >> construct.yaml
+            echo '  - tcl=8.6.*' >> construct.yaml
+            
+            # 关键：显式加入图形库，防止被阉割
+            echo '  - xorg-libxft' >> construct.yaml
+            echo '  - cairo' >> construct.yaml
+            echo '  - pango' >> construct.yaml
+            
+            # 工具包
+            echo '  - pyinstaller' >> construct.yaml
+            echo '  - pip' >> construct.yaml
+            echo '  - wheel' >> construct.yaml
+            
+            echo 'installer_filename: FixFontConda-Linux-aarch64.sh' >> construct.yaml
+            
+            echo '=== [3] 检查 YAML 内容 (Debug) ==='
+            cat construct.yaml
+            
+            echo '=== [4] 开始构建安装包 ==='
             constructor .
             
-            echo '=== [4] 移动产物 ==='
+            echo '=== [5] 移动产物 ==='
             mv FixFontConda-Linux-aarch64.sh /work/
           "
 
