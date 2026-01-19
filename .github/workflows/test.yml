@@ -1,4 +1,4 @@
-name: Download Fix-Font Packages (Brute Force)
+name: Download Fix-Font Packages (Fast & Furious)
 
 on: workflow_dispatch
 
@@ -29,33 +29,44 @@ jobs:
             conda config --add channels conda-forge
             conda config --set channel_priority strict
             
-            echo '=== [2/5] 暴力下载 Tcl (绕过 Solver) ==='
-            # 1. 使用 conda search 查找 linux-aarch64 下最新的 tcl 包信息 (JSON格式)
-            echo '正在检索 Tcl 版本信息...'
-            conda search 'conda-forge::tcl' --subdir linux-aarch64 --json > tcl_info.json
+            echo '=== [2/5] 极速提取 Tcl URL (No Python) ==='
+            cd /work/offline_pkgs
             
-            # 2. 使用 python 提取最新版本的下载 URL
-            # 逻辑：读取 JSON -> 找最后一个结果(最新版) -> 提取 url 字段
-            echo '正在解析下载链接...'
-            TCL_URL=\$(python -c \"import json; import sys; data = json.load(open('tcl_info.json')); print(data['tcl'][-1]['url'])\")
+            # 1. 缩小搜索范围 (只搜 8.6 以上)，减少数据量，防止 QEMU 假死
+            # 2. 直接用 grep 提取 https 链接，不用 python json.load
+            echo '正在检索 Tcl (Raw Text Mode)...'
+            
+            # 尝试动态搜索，如果失败则使用硬编码链接
+            if conda search 'conda-forge::tcl[version=\">=8.6\"]' --subdir linux-aarch64 --json > tcl_raw.json; then
+                echo '搜索完成，正在提取链接...'
+                # 使用 grep 抓取 url 字段，用 tail 取最后一个 (最新版)，用 cut/sed 清洗引号
+                # 兼容 .conda 和 .tar.bz2
+                TCL_URL=\$(grep -o '\"url\": \"https://.*\"' tcl_raw.json | tail -n 1 | cut -d '\"' -f 4)
+            else
+                echo '⚠️ 搜索超时或失败，使用备用链接...'
+                TCL_URL=\"\"
+            fi
+            
+            # 保底逻辑：如果上面没提取到，或者为空，直接使用这个已知的 ARM64 链接
+            if [ -z \"\$TCL_URL\" ]; then
+                echo '⚠️ 未能提取到动态链接，使用 Hardcoded 链接'
+                TCL_URL=\"https://conda.anaconda.org/conda-forge/linux-aarch64/tcl-8.6.13-h76f30a9_0.conda\"
+            fi
             
             echo \"-> 目标链接: \$TCL_URL\"
             
-            # 3. 直接下载！
-            cd /work/offline_pkgs
+            # 3. 下载
             wget -nv \"\$TCL_URL\"
             
             if ls tcl-*.conda 1> /dev/null 2>&1 || ls tcl-*.tar.bz2 1> /dev/null 2>&1; then
                 echo \"✅ Tcl 下载成功！\"
             else
-                echo \"❌ Tcl 下载失败，正在尝试备用硬链接...\"
-                # 备用方案：如果上面解析失败，尝试下载一个已知存在的版本 (8.6.13)
-                wget -nv https://conda.anaconda.org/conda-forge/linux-aarch64/tcl-8.6.13-h76f30a9_0.conda
+                echo \"❌ Tcl 下载严重失败！\"
+                exit 1
             fi
             
-            echo '=== [3/5] 下载 Tk (Force Xft) ==='
-            # 这里我们只下载 Tk 和图形库，Tcl 已经在上面搞定了
-            # 依然加上 xorg-libxft 防止下载到阉割版
+            echo '=== [3/5] 下载 Tk & 依赖 (Force Xft) ==='
+            # 这里的依赖全家桶会逼迫 conda 下载正确的 tk
             conda create -n temp_env \
                 python=3.11 \
                 tk=8.6.* \
@@ -68,20 +79,18 @@ jobs:
             
             echo '=== [4/5] 清理与整理 ==='
             cd /work/offline_pkgs
-            rm -rf *.lock urls.txt *.json info/ ../tcl_info.json
+            rm -rf *.lock urls.txt *.json info/ ../tcl_raw.json
             
             echo '生成安装脚本...'
             
-            # 使用 echo 生成安装脚本
             echo '#!/bin/bash' > install_fix.sh
-            echo 'echo \"=== 开始离线修复 (Brute Force Mode) ===\"' >> install_fix.sh
+            echo 'echo \"=== 开始离线修复 (Fast Mode) ===\"' >> install_fix.sh
             
-            # 1. 安装 Tcl (必须第一个装)
+            # 1. 安装 Tcl
             echo 'echo \"-> 安装 Tcl...\"' >> install_fix.sh
-            # 强制安装刚才 wget 下来的文件
             echo 'find . -maxdepth 1 -name \"tcl-*\" | xargs -I {} conda install --offline --no-deps --force-reinstall {}' >> install_fix.sh
             
-            # 2. 安装 Tk (过滤掉 noxft)
+            # 2. 安装 Tk (排除 noxft)
             echo 'echo \"-> 安装 Tk...\"' >> install_fix.sh
             echo 'find . -maxdepth 1 -name \"tk-*\" | grep -v \"noxft\" | xargs -I {} conda install --offline --no-deps --force-reinstall {}' >> install_fix.sh
             
@@ -106,12 +115,12 @@ jobs:
             
             echo '正在打包...'
             cd /work
-            tar -czvf fix-font-packages-arm64-brute.tar.gz offline_pkgs/
-            ls -lh fix-font-packages-arm64-brute.tar.gz
+            tar -czvf fix-font-packages-arm64-fast.tar.gz offline_pkgs/
+            ls -lh fix-font-packages-arm64-fast.tar.gz
           "
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: fix-font-packages-arm64-brute
-          path: fix-font-packages-arm64-brute.tar.gz
+          name: fix-font-packages-arm64-fast
+          path: fix-font-packages-arm64-fast.tar.gz
