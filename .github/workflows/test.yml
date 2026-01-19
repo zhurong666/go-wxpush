@@ -24,9 +24,7 @@ jobs:
             echo '=== [1/4] 准备下载目录 ==='
             mkdir -p /work/offline_pkgs
             
-            # --- 核心修正 ---
-            # 使用环境变量强制指定包的缓存目录
-            # 这样 Conda 下载的所有 tar.bz2 都会自动存到这个文件夹里
+            # 使用环境变量强制指定包的下载路径
             export CONDA_PKGS_DIRS=/work/offline_pkgs
             
             echo '=== [2/4] 配置下载环境 ==='
@@ -34,12 +32,15 @@ jobs:
             conda config --set channel_priority strict
             
             echo '=== [3/4] 开始下载 ==='
-            # 重点：请确认这里的 python=3.9 是否与你内网一致
-            # 如果你内网是 3.11，请务必改为 python=3.11
+            # --- 关键修改 ---
+            # 1. python=3.9: 依然建议检查你内网版本，如是 3.11 请修改
+            # 2. tk=8.6.* : 不再死磕 8.6.13，允许下载 8.6.14 或其他新版
+            # 3. tcl=8.6.*: 让 conda 自动寻找与 tk 匹配的最佳版本
+            
             conda create -n temp_env \
                 python=3.9 \
-                tk=8.6.13 \
-                tcl=8.6.13 \
+                tk=8.6.* \
+                tcl=8.6.* \
                 pyinstaller \
                 --download-only \
                 --yes
@@ -47,28 +48,23 @@ jobs:
             echo '=== [4/4] 清理与整理 ==='
             cd /work/offline_pkgs
             
-            # 清理无用文件 (锁文件、解压后的临时目录等)
+            # 清理缓存索引文件
             rm -rf *.lock urls.txt *.json info/
-            
-            # 为了防止打包过大，只保留压缩包文件 (.tar.bz2 或 .conda)
-            # 这一步不是必须的，但能让包更干净
             
             # 生成安装脚本
             cat > install_fix.sh <<EOF
             #!/bin/bash
             echo '=== 开始离线修复 ==='
             
-            # 1. 优先强制安装 tk 和 tcl (字体修复核心)
-            # 使用 --no-deps 防止因为它找不到 python 而拒绝安装
-            # 使用 --force-reinstall 确保覆盖掉原来的阉割版
+            # 1. 优先强制安装 tk 和 tcl
+            # 使用通配符匹配下载下来的具体版本
             echo '-> 安装 Tk/Tcl...'
             conda install --offline --no-deps --force-reinstall tk-*.tar.bz2
             conda install --offline --no-deps --force-reinstall tcl-*.tar.bz2
             
-            # 2. 安装剩余依赖 (PyInstaller 等)
+            # 2. 安装剩余依赖
             echo '-> 安装其他依赖...'
             for pkg in *.tar.bz2 *.conda; do
-                # 简单的排除逻辑，防止重复安装上面两个
                 if [[ \"\$pkg\" != *\"tk-\"* ]] && [[ \"\$pkg\" != *\"tcl-\"* ]]; then
                     conda install --offline \"\$pkg\"
                 fi
@@ -80,7 +76,6 @@ jobs:
             
             echo '正在打包...'
             cd /work
-            # 打包整个文件夹
             tar -czvf fix-font-packages-arm64.tar.gz offline_pkgs/
             ls -lh fix-font-packages-arm64.tar.gz
           "
