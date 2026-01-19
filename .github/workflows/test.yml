@@ -1,0 +1,89 @@
+name: Download Fix-Font Packages (ARM64)
+
+on: workflow_dispatch
+
+jobs:
+  download-packages:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+        with:
+          platforms: linux/arm64
+
+      - name: Download Packages via Docker
+        run: |
+          # 我们使用 Miniforge 镜像，因为它天生就是 conda-forge 源，且支持 ARM64
+          docker run --rm --platform linux/arm64 \
+          -v ${{ github.workspace }}:/work \
+          condaforge/miniforge3:latest /bin/bash -c "
+            
+            set -e
+            
+            echo '=== [1/4] 准备下载目录 ==='
+            mkdir -p /work/offline_pkgs
+            
+            echo '=== [2/4] 配置下载环境 ==='
+            # 确保只使用 conda-forge
+            conda config --add channels conda-forge
+            conda config --set channel_priority strict
+            
+            # 创建一个临时的空环境路径，用于计算依赖
+            # 我们不真正安装到环境里，而是利用 --download-only 把包缓存下来
+            # 关键：指定 Python 版本！假设你的 UOS 也是 3.8 或 3.9，这里最好指定一下
+            # 如果不指定，它会下载最新的 Python 依赖。建议保持通用，或者你修改下面的 python=3.9
+            
+            echo '=== [3/4] 开始下载 (Tk fix + PyInstaller) ==='
+            # 说明：
+            # 1. tk=8.6.13: 强制指定新版
+            # 2. pyinstaller: 你需要的打包工具
+            # 3. --download-only: 只下载不安装
+            # 4. --pkgs-dirs: 指定下载存放的位置，方便我们打包
+            
+            conda create -n temp_env \
+                python=3.11 \
+                tk=8.6.13 \
+                tcl=8.6.13 \
+                pyinstaller \
+                --download-only \
+                --pkgs-dirs /work/offline_pkgs \
+                --yes
+            
+            echo '=== [4/4] 清理与整理 ==='
+            cd /work/offline_pkgs
+            
+            # 删除 conda 的锁文件和无用文件
+            rm -f *.lock urls.txt
+            
+            # 生成一个简易的安装脚本，方便你在离线机器上一键安装
+            cat > install_fix.sh <<EOF
+            #!/bin/bash
+            # 自动离线安装脚本
+            echo '正在安装关键字体修复包 (Tk/Tcl)...'
+            conda install --offline tk-*.tar.bz2
+            conda install --offline tcl-*.tar.bz2
+            
+            echo '正在安装 PyInstaller 及其依赖...'
+            # 批量安装文件夹内所有包 (排除 tk/tcl 因为上面装过了，防止冲突，虽然重复装也没事)
+            # 为了安全，建议一个个装或者利用通配符
+            for pkg in *.tar.bz2 *.conda; do
+                conda install --offline \"\$pkg\"
+            done
+            
+            echo '安装完成！请重新运行 Python 测试字体。'
+            EOF
+            chmod +x install_fix.sh
+            
+            # 压缩
+            cd /work
+            tar -czvf fix-font-packages-arm64.tar.gz offline_pkgs/
+            ls -lh fix-font-packages-arm64.tar.gz
+          "
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fix-font-packages-arm64
+          path: fix-font-packages-arm64.tar.gz
