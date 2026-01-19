@@ -1,4 +1,4 @@
-name: Download Fix-Font Packages (Final)
+name: Download Fix-Font Packages (Range Spec)
 
 on: workflow_dispatch
 
@@ -29,16 +29,15 @@ jobs:
             conda config --add channels conda-forge
             conda config --set channel_priority strict
             
-            echo '=== [3/4] 开始下载 (Force Xft) ==='
-            # 修正说明：
-            # 1. libxft -> xorg-libxft (这是 conda-forge 上的正确包名)
-            # 2. 加入 pango (字体渲染增强)
-            # 3. 显式要求 tk 和 tcl
+            echo '=== [3/4] 开始下载 (Range Spec + Force Xft) ==='
+            # 策略升级：
+            # 1. 使用 >=8.6,<8.7 锁定主版本范围，解决 'not found' 问题
+            # 2. 显式要求 xorg-libxft/pango，逼迫解算器放弃 'noxft' 版 Tk
             
             conda create -n temp_env \
                 python=3.11 \
-                tk=8.6.* \
-                tcl=8.6.* \
+                'tk>=8.6,<8.7' \
+                'tcl>=8.6,<8.7' \
                 xorg-libxft \
                 cairo \
                 pango \
@@ -52,28 +51,27 @@ jobs:
             
             echo '生成安装脚本...'
             
-            # 使用 echo 生成脚本，避免 EOF 语法错误
+            # 使用 echo 生成脚本，避免 EOF 报错
             echo '#!/bin/bash' > install_fix.sh
-            echo 'echo \"=== 开始离线修复 (Final) ===\"' >> install_fix.sh
+            echo 'echo \"=== 开始离线修复 (Range Version) ===\"' >> install_fix.sh
             
-            # 1. 安装 Tcl (基础语言包)
+            # 1. 安装 Tcl
             echo 'echo \"-> 安装 Tcl...\"' >> install_fix.sh
             echo 'find . -maxdepth 1 -name \"tcl-*\" | xargs -I {} conda install --offline --no-deps --force-reinstall {}' >> install_fix.sh
             
-            # 2. 安装 Tk (图形界面包)
-            # 这里的 grep -v noxft 是最后一道防线，确保绝不安装阉割版
+            # 2. 安装 Tk (确保非阉割版)
             echo 'echo \"-> 安装 Tk...\"' >> install_fix.sh
             echo 'find . -maxdepth 1 -name \"tk-*\" | grep -v \"noxft\" | xargs -I {} conda install --offline --no-deps --force-reinstall {}' >> install_fix.sh
             
-            # 3. 安装图形底层依赖 (Xft, Cairo, Pango)
+            # 3. 安装图形底层依赖
             echo 'echo \"-> 安装图形依赖 (Xft/Cairo/Pango)...\"' >> install_fix.sh
             echo 'find . -maxdepth 1 -name \"xorg-libxft-*\" -o -name \"cairo-*\" -o -name \"pango-*\" | xargs -I {} conda install --offline --no-deps --force-reinstall {}' >> install_fix.sh
 
-            # 4. 安装其他所有依赖 (PyInstaller 等)
+            # 4. 安装其他所有依赖
             echo 'echo \"-> 安装其他依赖...\"' >> install_fix.sh
             echo 'for pkg in *; do' >> install_fix.sh
             echo '    if [[ \"\$pkg\" == *.tar.bz2 ]] || [[ \"\$pkg\" == *.conda ]]; then' >> install_fix.sh
-            echo '        # 排除掉上面已经专门处理过的包' >> install_fix.sh
+            # 排除已安装的核心包
             echo '        if [[ \"\$pkg\" != tk-* ]] && [[ \"\$pkg\" != tcl-* ]] && [[ \"\$pkg\" != xorg-libxft-* ]] && [[ \"\$pkg\" != cairo-* ]] && [[ \"\$pkg\" != pango-* ]]; then' >> install_fix.sh
             echo '            echo \"Installing \$pkg ...\"' >> install_fix.sh
             echo '            conda install --offline \"\$pkg\"' >> install_fix.sh
@@ -87,12 +85,12 @@ jobs:
             
             echo '正在打包...'
             cd /work
-            tar -czvf fix-font-packages-arm64-final.tar.gz offline_pkgs/
-            ls -lh fix-font-packages-arm64-final.tar.gz
+            tar -czvf fix-font-packages-arm64-range.tar.gz offline_pkgs/
+            ls -lh fix-font-packages-arm64-range.tar.gz
           "
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: fix-font-packages-arm64-final
-          path: fix-font-packages-arm64-final.tar.gz
+          name: fix-font-packages-arm64-range
+          path: fix-font-packages-arm64-range.tar.gz
