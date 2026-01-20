@@ -1,4 +1,4 @@
-name: Download Fix-Font Packages (Final Robust)
+name: Download Fix-Font Packages (Script Mount Method)
 
 on: workflow_dispatch
 
@@ -8,103 +8,112 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
+      # 1. 核心改变：先在外部生成脚本文件，避免 Quote Escaping 错误
+      - name: Generate Build Script
+        run: |
+          cat << 'EOF' > entrypoint.sh
+          #!/bin/bash
+          set -e
+          
+          echo "=== [1] 初始化环境 (安装解压工具) ==="
+          # 禁止输出过多日志，只看关键信息
+          conda install -n base binutils curl xz --yes > /dev/null 2>&1
+          
+          mkdir -p /work/offline_pkgs
+          export CONDA_PKGS_DIRS=/work/offline_pkgs
+          conda clean --all --yes
+          conda config --add channels conda-forge
+          conda config --set channel_priority strict
+          
+          echo "=== [2] 下载常规 Conda 包 ==="
+          conda create -n download_env \
+              python=3.11 \
+              tk=8.6 \
+              xorg-libxft cairo pango \
+              --download-only --yes
+          
+          echo "=== [3] 下载并提取 Ubuntu 系统级库 (实体文件版) ==="
+          mkdir -p /work/system_libs
+          cd /work/system_libs
+          
+          echo "-> Downloading debs..."
+          # 使用 Ubuntu Bionic (18.04) 源，兼容性最佳
+          curl -L -o libtk8.6.deb http://ports.ubuntu.com/pool/main/t/tk8.6/libtk8.6_8.6.8-4_arm64.deb
+          curl -L -o libtcl8.6.deb http://ports.ubuntu.com/pool/main/t/tcl8.6/libtcl8.6_8.6.8+dfsg-3_arm64.deb
+          
+          echo "-> Extracting Tk..."
+          ar x libtk8.6.deb data.tar.xz
+          tar -xf data.tar.xz
+          # 使用 find 查找真正的实体文件(type f)，忽略软链接
+          REAL_TK=$(find usr/lib -name 'libtk8.6.so.8*' -type f | head -n 1)
+          echo "Found Real Tk Binary: $REAL_TK"
+          cp "$REAL_TK" ./libtk8.6.so
+          rm data.tar.xz
+          rm -rf usr
+          
+          echo "-> Extracting Tcl..."
+          ar x libtcl8.6.deb data.tar.xz
+          tar -xf data.tar.xz
+          REAL_TCL=$(find usr/lib -name 'libtcl8.6.so.8*' -type f | head -n 1)
+          echo "Found Real Tcl Binary: $REAL_TCL"
+          cp "$REAL_TCL" ./libtcl8.6.so
+          rm data.tar.xz
+          rm -rf usr
+          
+          echo "-> 验证提取结果 (文件大小应 >1MB):"
+          ls -lh *.so
+          
+          echo "=== [4] 生成安装脚本 ==="
+          cd /work
+          rm -rf *.lock urls.txt *.json info/
+          
+          # 生成 install.sh
+          cat > install.sh << 'INSTALL_EOF'
+          #!/bin/bash
+          echo "=== 1. 安装 Conda 包 ==="
+          conda install --offline --no-deps --force-reinstall offline_pkgs/*.conda offline_pkgs/*.tar.bz2
+          
+          echo "=== 2. 器官移植 (使用 Ubuntu 实体库) ==="
+          TARGET_LIB="$CONDA_PREFIX/lib"
+          
+          echo "正在覆盖 libtk8.6.so ..."
+          cp -f system_libs/libtk8.6.so "$TARGET_LIB/libtk8.6.so"
+          cp -f system_libs/libtcl8.6.so "$TARGET_LIB/libtcl8.6.so"
+          
+          # 重建版本号软链接，保证兼容性
+          ln -sf "$TARGET_LIB/libtk8.6.so" "$TARGET_LIB/libtk8.6.so.0"
+          ln -sf "$TARGET_LIB/libtcl8.6.so" "$TARGET_LIB/libtcl8.6.so.0"
+          
+          echo "=== 3. 注入字体配置 (治愈雪盲症) ==="
+          mkdir -p "$CONDA_PREFIX/etc/conda/activate.d"
+          mkdir -p "$CONDA_PREFIX/etc/conda/deactivate.d"
+          
+          echo 'export FONTCONFIG_PATH=/etc/fonts' > "$CONDA_PREFIX/etc/conda/activate.d/fonts.sh"
+          echo 'unset FONTCONFIG_PATH' >> "$CONDA_PREFIX/etc/conda/deactivate.d/fonts.sh"
+          
+          echo "✅ 安装完成! 请运行: conda deactivate && conda activate dev"
+          INSTALL_EOF
+          
+          chmod +x install.sh
+          
+          echo "=== [5] 打包 ==="
+          tar -czvf fix-font-final-arm64.tar.gz offline_pkgs/ system_libs/ install.sh
+          EOF
+          
+          # 赋予脚本执行权限
+          chmod +x entrypoint.sh
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v2
         with:
           platforms: linux/arm64
 
-      - name: Download Packages & System Libs
+      - name: Run Docker
         run: |
+          # 2. 核心改变：直接运行挂载进去的脚本文件
           docker run --rm --platform linux/arm64 \
           -v ${{ github.workspace }}:/work \
-          condaforge/miniforge3:latest /bin/bash -c "
-            
-            set -e
-            # 不使用 set -x 以免日志过乱，手动打印关键信息
-            
-            echo '=== [0] 准备工具 (curl, binutils, xz) ==='
-            conda install -n base binutils curl xz --yes > /dev/null 2>&1
-
-            echo '=== [1] 初始化下载目录 ==='
-            mkdir -p /work/offline_pkgs
-            export CONDA_PKGS_DIRS=/work/offline_pkgs
-            conda clean --all --yes
-            conda config --add channels conda-forge
-            conda config --set channel_priority strict
-            
-            echo '=== [2] 下载常规 Conda 包 ==='
-            conda create -n download_env \
-                python=3.11 \
-                tk=8.6 \
-                xorg-libxft cairo pango \
-                --download-only --yes
-            
-            echo '=== [3] 下载并提取 Ubuntu 系统级库 (实体文件版) ==='
-            mkdir -p /work/system_libs
-            cd /work/system_libs
-            
-            # --- 下载 ---
-            echo '-> Downloading debs...'
-            curl -L -o libtk8.6.deb http://ports.ubuntu.com/pool/main/t/tk8.6/libtk8.6_8.6.8-4_arm64.deb
-            curl -L -o libtcl8.6.deb http://ports.ubuntu.com/pool/main/t/tcl8.6/libtcl8.6_8.6.8+dfsg-3_arm64.deb
-            
-            # --- 提取 libtk ---
-            echo '-> Extracting Tk...'
-            ar x libtk8.6.deb data.tar.xz
-            tar -xf data.tar.xz
-            # 关键修改：找到真正的 .so 文件 (不是软链接)，通常文件比较大
-            # 在 deb 中路径通常是 usr/lib/aarch64-linux-gnu/libtk8.6.so.8.6.8
-            REAL_TK=\$(find usr/lib -name 'libtk8.6.so.8*' -type f | head -n 1)
-            echo \"Found Real Tk Binary: \$REAL_TK\"
-            cp \$REAL_TK ./libtk8.6.so
-            rm data.tar.xz
-            rm -rf usr
-            
-            # --- 提取 libtcl ---
-            echo '-> Extracting Tcl...'
-            ar x libtcl8.6.deb data.tar.xz
-            tar -xf data.tar.xz
-            REAL_TCL=\$(find usr/lib -name 'libtcl8.6.so.8*' -type f | head -n 1)
-            echo \"Found Real Tcl Binary: \$REAL_TCL\"
-            cp \$REAL_TCL ./libtcl8.6.so
-            rm data.tar.xz
-            rm -rf usr
-
-            echo '-> 验证提取结果 (不再是软链接):'
-            ls -lh *.so
-            
-            echo '=== [4] 生成安装脚本 (Safe Mode) ==='
-            cd /work
-            rm -rf *.lock urls.txt *.json info/
-            
-            # 使用 echo 逐行写入，避免 EOF 嵌套错误
-            echo '#!/bin/bash' > install.sh
-            echo 'echo "=== 1. 安装 Conda 包 ==="' >> install.sh
-            echo 'conda install --offline --no-deps --force-reinstall offline_pkgs/*.conda offline_pkgs/*.tar.bz2' >> install.sh
-            
-            echo '' >> install.sh
-            echo 'echo "=== 2. 器官移植 (使用 Ubuntu 实体库) ==="' >> install.sh
-            echo 'TARGET_LIB="$CONDA_PREFIX/lib"' >> install.sh
-            echo 'cp -f system_libs/libtk8.6.so $TARGET_LIB/libtk8.6.so' >> install.sh
-            echo 'cp -f system_libs/libtcl8.6.so $TARGET_LIB/libtcl8.6.so' >> install.sh
-            echo '# 创建版本号软链接以防万一' >> install.sh
-            echo 'ln -sf $TARGET_LIB/libtk8.6.so $TARGET_LIB/libtk8.6.so.0' >> install.sh
-            echo 'ln -sf $TARGET_LIB/libtcl8.6.so $TARGET_LIB/libtcl8.6.so.0' >> install.sh
-            
-            echo '' >> install.sh
-            echo 'echo "=== 3. 注入字体配置 ==="' >> install.sh
-            echo 'mkdir -p $CONDA_PREFIX/etc/conda/activate.d' >> install.sh
-            echo 'mkdir -p $CONDA_PREFIX/etc/conda/deactivate.d' >> install.sh
-            echo 'echo "export FONTCONFIG_PATH=/etc/fonts" > $CONDA_PREFIX/etc/conda/activate.d/fonts.sh' >> install.sh
-            echo 'echo "unset FONTCONFIG_PATH" >> $CONDA_PREFIX/etc/conda/deactivate.d/fonts.sh' >> install.sh
-            
-            echo 'echo "✅ 完成! 请运行: conda deactivate && conda activate dev"' >> install.sh
-            
-            chmod +x install.sh
-            
-            echo '=== [5] 打包 ==='
-            tar -czvf fix-font-final-arm64.tar.gz offline_pkgs/ system_libs/ install.sh
-          "
+          condaforge/miniforge3:latest /bin/bash /work/entrypoint.sh
           
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
