@@ -1,4 +1,19 @@
-- name: Download Packages & System Libs
+name: Download Fix-Font Packages (Smart Dependency)
+
+on: workflow_dispatch
+
+jobs:
+  download-packages:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+        with:
+          platforms: linux/arm64
+
+      - name: Download Packages & System Libs
         run: |
           docker run --rm --platform linux/arm64 \
           -v ${{ github.workspace }}:/work \
@@ -89,3 +104,9 @@
             
             tar -czvf fix-font-final-arm64.tar.gz offline_pkgs/ system_libs/ install.sh
           "
+          
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fix-font-pkgs-auto
+          path: fix-font-pkgs-auto.tar.gz
