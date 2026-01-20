@@ -1,4 +1,4 @@
-name: Download Fix-Font Packages (Smart Dependency)
+name: Download Fix-Font Packages (Final Stable)
 
 on: workflow_dispatch
 
@@ -23,7 +23,7 @@ jobs:
             set -e
             
             echo '=== [0] 工具准备 ==='
-            # 安装 binutils (包含 ar 命令) 和 curl
+            # 安装解压工具
             conda install -n base binutils curl --yes
 
             echo '=== [1] 环境初始化 ==='
@@ -40,22 +40,30 @@ jobs:
                 xorg-libxft cairo pango \
                 --download-only --yes
             
-            echo '=== [2.5] ★关键步骤★：下载 Debian 系统级 Tk 库 ==='
+            echo '=== [2.5] ★关键步骤★：下载 Ubuntu 18.04 系统级 Tk 库 (最强兼容版) ==='
             mkdir -p /work/system_libs
             cd /work/system_libs
             
-            # 使用 Debian 10 (Buster/UOS20) 的源
-            # 注意：如果链接失效，可能需要更换为 archive.debian.org
-            curl -L -O http://ftp.debian.org/debian/pool/main/t/tk8.6/libtk8.6_8.6.9-2_arm64.deb
-            curl -L -O http://ftp.debian.org/debian/pool/main/t/tcl8.6/libtcl8.6_8.6.9-2_arm64.deb
+            # 使用 Ubuntu Ports (Bionic) 源，确保 glibc 版本够低，兼容 UOS 20
+            # Tk 8.6.8 与 8.6.x 系列 ABI 完全兼容
+            
+            echo 'Downloading libtk8.6...'
+            curl -L -o libtk8.6.deb http://ports.ubuntu.com/pool/main/t/tk8.6/libtk8.6_8.6.8-4_arm64.deb
+            
+            echo 'Downloading libtcl8.6...'
+            curl -L -o libtcl8.6.deb http://ports.ubuntu.com/pool/main/t/tcl8.6/libtcl8.6_8.6.8-4_arm64.deb
+            
+            # 检查文件大小，确保不是 300 字节的 404 网页
+            ls -lh *.deb
             
             # 解压 deb 包
-            ar x libtk8.6_8.6.9-2_arm64.deb data.tar.xz
+            ar x libtk8.6.deb data.tar.xz
             tar -xf data.tar.xz
+            # 移动并重命名 (Ubuntu 的命名规则通常是 libtk8.6.so.0)
             mv usr/lib/aarch64-linux-gnu/libtk8.6.so.0 ./libtk8.6.so
             rm data.tar.xz
             
-            ar x libtcl8.6_8.6.9-2_arm64.deb data.tar.xz
+            ar x libtcl8.6.deb data.tar.xz
             tar -xf data.tar.xz
             mv usr/lib/aarch64-linux-gnu/libtcl8.6.so.0 ./libtcl8.6.so
             
@@ -66,13 +74,13 @@ jobs:
             cd /work
             rm -rf *.lock urls.txt *.json info/
             
-            # === 注意：下面这块内容是在 Docker 字符串内部，双引号必须转义 ===
+            # 注意：下面的 EOF 块内，双引号 \" 必须转义，变量 \$ 必须转义
             cat > install.sh << 'EOF'
             #!/bin/bash
             echo \"=== 1. 安装 Conda 包 ===\"
             conda install --offline --no-deps --force-reinstall offline_pkgs/*.conda offline_pkgs/*.tar.bz2
             
-            echo \"=== 2. 执行器官移植 (替换为系统级 Tk 库) ===\"
+            echo \"=== 2. 执行器官移植 (替换为 Ubuntu 系统级 Tk 库) ===\"
             # 找到 conda 环境目录
             TARGET_LIB=\"\$CONDA_PREFIX/lib\"
             
@@ -80,8 +88,9 @@ jobs:
             cp -f system_libs/libtk8.6.so \$TARGET_LIB/libtk8.6.so
             cp -f system_libs/libtcl8.6.so \$TARGET_LIB/libtcl8.6.so
             
-            # 确保软链接存在
+            # 建立软链接，防止程序找 .so.0
             ln -sf \$TARGET_LIB/libtk8.6.so \$TARGET_LIB/libtk8.6.so.0
+            ln -sf \$TARGET_LIB/libtcl8.6.so \$TARGET_LIB/libtcl8.6.so.0
             
             echo \"=== 3. 注入系统字体配置 (治愈雪盲症) ===\"
             mkdir -p \$CONDA_PREFIX/etc/conda/activate.d
@@ -95,7 +104,6 @@ jobs:
             
             chmod +x install.sh
             
-            # 统一压缩包名称
             tar -czvf fix-font-final-arm64.tar.gz offline_pkgs/ system_libs/ install.sh
           "
           
