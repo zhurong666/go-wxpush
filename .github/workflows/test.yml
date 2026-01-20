@@ -1,4 +1,4 @@
-name: Download Fix-Font Packages (Script Mount Method)
+name: Download Fix-Font Packages (Final Catch-All)
 
 on: workflow_dispatch
 
@@ -8,15 +8,14 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      # 1. 核心改变：先在外部生成脚本文件，避免 Quote Escaping 错误
+      # 生成脚本：增加了 ls -R 调试，并放宽了 find 匹配模式
       - name: Generate Build Script
         run: |
           cat << 'EOF' > entrypoint.sh
           #!/bin/bash
           set -e
           
-          echo "=== [1] 初始化环境 (安装解压工具) ==="
-          # 禁止输出过多日志，只看关键信息
+          echo "=== [1] 初始化环境 ==="
           conda install -n base binutils curl xz --yes > /dev/null 2>&1
           
           mkdir -p /work/offline_pkgs
@@ -32,21 +31,31 @@ jobs:
               xorg-libxft cairo pango \
               --download-only --yes
           
-          echo "=== [3] 下载并提取 Ubuntu 系统级库 (实体文件版) ==="
+          echo "=== [3] 下载并提取 Ubuntu 系统级库 ==="
           mkdir -p /work/system_libs
           cd /work/system_libs
           
           echo "-> Downloading debs..."
-          # 使用 Ubuntu Bionic (18.04) 源，兼容性最佳
+          # Ubuntu 18.04 (Bionic) 源
           curl -L -o libtk8.6.deb http://ports.ubuntu.com/pool/main/t/tk8.6/libtk8.6_8.6.8-4_arm64.deb
           curl -L -o libtcl8.6.deb http://ports.ubuntu.com/pool/main/t/tcl8.6/libtcl8.6_8.6.8+dfsg-3_arm64.deb
           
           echo "-> Extracting Tk..."
           ar x libtk8.6.deb data.tar.xz
           tar -xf data.tar.xz
-          # 使用 find 查找真正的实体文件(type f)，忽略软链接
-          REAL_TK=$(find usr/lib -name 'libtk8.6.so.8*' -type f | head -n 1)
-          echo "Found Real Tk Binary: $REAL_TK"
+          
+          echo "[Debug] 列出解压后的所有 Tk 文件，防止找不到:"
+          find . -name "libtk*" -ls
+          
+          # ★核心修复：查找所有以 libtk8.6.so 开头的实体文件(type f)，不再限制具体版本号
+          REAL_TK=$(find . -type f -name "libtk8.6.so*" | head -n 1)
+          
+          if [ -z "$REAL_TK" ]; then
+            echo "❌ Error: 找不到 Tk 实体文件！"
+            exit 1
+          fi
+          
+          echo "✅ Found Real Tk Binary: $REAL_TK"
           cp "$REAL_TK" ./libtk8.6.so
           rm data.tar.xz
           rm -rf usr
@@ -54,20 +63,21 @@ jobs:
           echo "-> Extracting Tcl..."
           ar x libtcl8.6.deb data.tar.xz
           tar -xf data.tar.xz
-          REAL_TCL=$(find usr/lib -name 'libtcl8.6.so.8*' -type f | head -n 1)
-          echo "Found Real Tcl Binary: $REAL_TCL"
+          
+          # 同理修复 Tcl
+          REAL_TCL=$(find . -type f -name "libtcl8.6.so*" | head -n 1)
+          echo "✅ Found Real Tcl Binary: $REAL_TCL"
           cp "$REAL_TCL" ./libtcl8.6.so
           rm data.tar.xz
           rm -rf usr
           
-          echo "-> 验证提取结果 (文件大小应 >1MB):"
+          echo "-> 最终验证 (必须 > 1MB):"
           ls -lh *.so
           
           echo "=== [4] 生成安装脚本 ==="
           cd /work
           rm -rf *.lock urls.txt *.json info/
           
-          # 生成 install.sh
           cat > install.sh << 'INSTALL_EOF'
           #!/bin/bash
           echo "=== 1. 安装 Conda 包 ==="
@@ -80,11 +90,11 @@ jobs:
           cp -f system_libs/libtk8.6.so "$TARGET_LIB/libtk8.6.so"
           cp -f system_libs/libtcl8.6.so "$TARGET_LIB/libtcl8.6.so"
           
-          # 重建版本号软链接，保证兼容性
+          # 重建软链接
           ln -sf "$TARGET_LIB/libtk8.6.so" "$TARGET_LIB/libtk8.6.so.0"
           ln -sf "$TARGET_LIB/libtcl8.6.so" "$TARGET_LIB/libtcl8.6.so.0"
           
-          echo "=== 3. 注入字体配置 (治愈雪盲症) ==="
+          echo "=== 3. 注入字体配置 ==="
           mkdir -p "$CONDA_PREFIX/etc/conda/activate.d"
           mkdir -p "$CONDA_PREFIX/etc/conda/deactivate.d"
           
@@ -100,7 +110,6 @@ jobs:
           tar -czvf fix-font-final-arm64.tar.gz offline_pkgs/ system_libs/ install.sh
           EOF
           
-          # 赋予脚本执行权限
           chmod +x entrypoint.sh
 
       - name: Set up QEMU
@@ -110,7 +119,6 @@ jobs:
 
       - name: Run Docker
         run: |
-          # 2. 核心改变：直接运行挂载进去的脚本文件
           docker run --rm --platform linux/arm64 \
           -v ${{ github.workspace }}:/work \
           condaforge/miniforge3:latest /bin/bash /work/entrypoint.sh
