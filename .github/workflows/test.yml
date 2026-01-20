@@ -22,12 +22,8 @@ jobs:
             set -x
             set -e
             
-            # 安装必要的工具 (用于解压 deb 包)
-            # miniforge 镜像是基于 Linux 的，我们用 apt 安装 binutils (包含 ar 命令) 和 curl
-            # 注意：miniforge3 基础镜像通常是 Debian/Ubuntu 衍生，如果 apt 不可用，我们用 conda 装
-            
             echo '=== [0] 工具准备 ==='
-            # 这里的 miniforge 镜像可能没有 apt，我们用 conda 安装 binutils 提取工具
+            # 安装 binutils (包含 ar 命令) 和 curl
             conda install -n base binutils curl --yes
 
             echo '=== [1] 环境初始化 ==='
@@ -38,7 +34,6 @@ jobs:
             conda config --set channel_priority strict
             
             echo '=== [2] 下载常规 Conda 包 ==='
-            # 依然下载这些包，作为依赖基础，但我们会替换其中的核心库
             conda create -n download_env \
                 python=3.11 \
                 tk=8.6 \
@@ -46,17 +41,15 @@ jobs:
                 --download-only --yes
             
             echo '=== [2.5] ★关键步骤★：下载 Debian 系统级 Tk 库 ==='
-            # 我们直接从 Debian Buster (对应 UOS 20) 的源里下载 arm64 的 tk8.6
-            # 这个库 100% 支持 Xft
-            
             mkdir -p /work/system_libs
             cd /work/system_libs
             
-            # 下载 libtk8.6 和 libtcl8.6 (Debian 10 Buster 源，兼容性最好)
-            curl -O http://ftp.debian.org/debian/pool/main/t/tk8.6/libtk8.6_8.6.9-2_arm64.deb
-            curl -O http://ftp.debian.org/debian/pool/main/t/tcl8.6/libtcl8.6_8.6.9-2_arm64.deb
+            # 使用 Debian 10 (Buster/UOS20) 的源
+            # 注意：如果链接失效，可能需要更换为 archive.debian.org
+            curl -L -O http://ftp.debian.org/debian/pool/main/t/tk8.6/libtk8.6_8.6.9-2_arm64.deb
+            curl -L -O http://ftp.debian.org/debian/pool/main/t/tcl8.6/libtcl8.6_8.6.9-2_arm64.deb
             
-            # 解压 deb 包 (deb -> ar -> data.tar.xz -> files)
+            # 解压 deb 包
             ar x libtk8.6_8.6.9-2_arm64.deb data.tar.xz
             tar -xf data.tar.xz
             mv usr/lib/aarch64-linux-gnu/libtk8.6.so.0 ./libtk8.6.so
@@ -73,40 +66,41 @@ jobs:
             cd /work
             rm -rf *.lock urls.txt *.json info/
             
-            # 创建安装脚本
+            # === 注意：下面这块内容是在 Docker 字符串内部，双引号必须转义 ===
             cat > install.sh << 'EOF'
             #!/bin/bash
-            echo "=== 1. 安装 Conda 包 ==="
+            echo \"=== 1. 安装 Conda 包 ===\"
             conda install --offline --no-deps --force-reinstall offline_pkgs/*.conda offline_pkgs/*.tar.bz2
             
-            echo "=== 2. 执行器官移植 (替换为系统级 Tk 库) ==="
+            echo \"=== 2. 执行器官移植 (替换为系统级 Tk 库) ===\"
             # 找到 conda 环境目录
-            TARGET_LIB="$CONDA_PREFIX/lib"
+            TARGET_LIB=\"\$CONDA_PREFIX/lib\"
             
-            echo "正在覆盖 libtk8.6.so ..."
-            cp -f system_libs/libtk8.6.so $TARGET_LIB/libtk8.6.so
-            cp -f system_libs/libtcl8.6.so $TARGET_LIB/libtcl8.6.so
+            echo \"正在覆盖 libtk8.6.so ...\"
+            cp -f system_libs/libtk8.6.so \$TARGET_LIB/libtk8.6.so
+            cp -f system_libs/libtcl8.6.so \$TARGET_LIB/libtcl8.6.so
             
             # 确保软链接存在
-            ln -sf $TARGET_LIB/libtk8.6.so $TARGET_LIB/libtk8.6.so.0
+            ln -sf \$TARGET_LIB/libtk8.6.so \$TARGET_LIB/libtk8.6.so.0
             
-            echo "=== 3. 注入系统字体配置 (治愈雪盲症) ==="
-            mkdir -p $CONDA_PREFIX/etc/conda/activate.d
-            mkdir -p $CONDA_PREFIX/etc/conda/deactivate.d
+            echo \"=== 3. 注入系统字体配置 (治愈雪盲症) ===\"
+            mkdir -p \$CONDA_PREFIX/etc/conda/activate.d
+            mkdir -p \$CONDA_PREFIX/etc/conda/deactivate.d
             
-            echo 'export FONTCONFIG_PATH=/etc/fonts' > $CONDA_PREFIX/etc/conda/activate.d/fonts.sh
-            echo 'unset FONTCONFIG_PATH' >> $CONDA_PREFIX/etc/conda/deactivate.d/fonts.sh
+            echo 'export FONTCONFIG_PATH=/etc/fonts' > \$CONDA_PREFIX/etc/conda/activate.d/fonts.sh
+            echo 'unset FONTCONFIG_PATH' >> \$CONDA_PREFIX/etc/conda/deactivate.d/fonts.sh
             
-            echo "✅ 安装完成！请重新激活环境: conda deactivate && conda activate dev"
+            echo \"✅ 安装完成！请重新激活环境: conda deactivate && conda activate dev\"
             EOF
             
             chmod +x install.sh
             
+            # 统一压缩包名称
             tar -czvf fix-font-final-arm64.tar.gz offline_pkgs/ system_libs/ install.sh
           "
           
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: fix-font-pkgs-auto
-          path: fix-font-pkgs-auto.tar.gz
+          name: fix-font-final-arm64
+          path: fix-font-final-arm64.tar.gz
