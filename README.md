@@ -1,34 +1,42 @@
 # Go-WXPush - 微信消息推送服务 (基于golang)
 
-这是一个基于 golang 开发的微信测试公众号模板消息推送服务。它提供了一个简单的 API 接口，让您可以轻松地通过 HTTP 请求将消息推送到指定的微信用户。感谢[frankiejun/wxpush](https://github.com/frankiejun/wxpush)
+这是一个基于 golang 开发的微信测试公众号模板消息推送服务。它提供了一个简单的 API 接口，让您可以轻松地通过 HTTP 请求将消息推送到指定的微信用户。
 
 <p align="center">
-<img src="./img/logo.png">
+<img src="https://s2.loli.net/2026/01/23/sZNu9dCtIkFS4D7.png">
 </p>
+
+## 🚀 广告
+自用机场推荐,不贵、稳定、晚高峰不卡 [TaiShan Net](https://jp.taishan.pro/register?code=sy3Mfx19)
+
+![xxx](https://i.ibb.co/5xB4Hp1V/Pix-Pin-2026-03-03-00-26-53.jpg)
 
 ## ✨ 特性
 
 ✅ 完全免费，下载即使用  
-✅ 支持 Docker 一键部署  
+✅ 支持 Docker 一键部署（镜像容器大小仅2MB）  
 ✅ 每天 10 万次额度，个人用不完  
 ✅ 真正的微信原生弹窗 + 声音提醒  
 ✅ 支持多用户  
 ✅ 提供免费服务[https://push.hzz.cool](https://push.hzz.cool)（请勿滥用）  
-✅ 跳转稳定，自带消息详情页面 (默认使用[https://push.hzz.cool/detail](https://push.hzz.cool/detail), 可自己部署后使用参数替换)  
-✅ 可无限换皮肤 (使用项目[wxpushSkin](https://github.com/frankiejun/wxpushSkin))
+✅ 跳转稳定，自带消息详情页面 (默认使用[https://push.hzz.cool/detail](https://push.hzz.cool/detail), 可自己部署后使用参数替换)
 
 ## ⚠️ 部署条件
 
-- [微信公众平台接口测试帐号申请](https://mp.weixin.qq.com/debug/cgi-bin/sandbox?t=sandbox/login)
-![wx1.png](img/wx1.png)
-- 获取appid 、appsecret
-![wx2.png](img/wx2.png)
-- 关注测试公众号，获取userid(微信号)，新增测试模板(注意模版内容填写格式 `内容: {{content.DATA}}`)  获取template_id(模板ID)
-![wx3.png](img/wx3.png)
-- 将以上获取到的参数代入下面使用即可
-![wx3.png](img/w0.jpg)
-![wx3.png](img/w1.jpg)
+1. [微信公众平台接口测试帐号申请](https://mp.weixin.qq.com/debug/cgi-bin/sandbox?t=sandbox/login)  
 
+   ![wx1.png](img/wx1.png)
+3. 获取appid 、appsecret  
+
+   ![wx2.png](https://s2.loli.net/2026/01/23/cfzjWdlpVDPyECu.png)
+5. 关注测试公众号，获取userid(微信号)，新增测试模板，获取template_id(模板ID)(<mark> 注意模版内容填写格式 `内容: {{content.DATA}}` , 不要仅填写`{{content.DATA}}` 前面随便加一点其他文案，不然推送会不显示内容！！！  <mark>)  
+
+   ![wx3.png](img/wx3.png)
+7. 将以上获取到的参数代入下面使用即可  
+
+   ![wx3.png](img/w0.jpg)
+   ![wx3.png](img/w1.jpg)
+   
 ## 🚀 部署指南
 
 ### [下载编译好的文件启动](https://github.com/hezhizheng/go-wxpush/releases/)
@@ -45,6 +53,7 @@
 gox -osarch="windows/amd64" -ldflags "-s -w" -gcflags="all=-trimpath=${PWD}" -asmflags="all=-trimpath=${PWD}"
 gox -osarch="darwin/amd64" -ldflags "-s -w" -gcflags="all=-trimpath=${PWD}" -asmflags="all=-trimpath=${PWD}"
 gox -osarch="linux/amd64" -ldflags "-s -w" -gcflags="all=-trimpath=${PWD}" -asmflags="all=-trimpath=${PWD}"
+gox -osarch="linux/arm64" -ldflags "-s -w" -gcflags="all=-trimpath=${PWD}" -asmflags="all=-trimpath=${PWD}"
 ```
 
 ### 🐳 Docker 启动
@@ -68,9 +77,9 @@ docker run -d -p 5566:5566 --name go-wxpush0 go-wxpush:v2 \
 ### 🐳 Docker 一键部署
 ```
 # 重新部署请先拉一遍最新的镜像
-docker pull hezhizheng/go-wxpush:v3
+docker pull hezhizheng/go-wxpush:v4
 # 参数格式与终端启动保持一致, 替换成实际值即可
-docker run -it -d -p 5566:5566 --init --name go-wxpush3 hezhizheng/go-wxpush:v3 \
+docker run -it -d -p 5566:5566 --init --name go-wxpush4 hezhizheng/go-wxpush:v4 \
 -port "5566" \
 -title "测试标题5566" \
 -content "测试内容5566" \
@@ -81,7 +90,7 @@ docker run -it -d -p 5566:5566 --init --name go-wxpush3 hezhizheng/go-wxpush:v3 
 -tz "Asia/Shanghai"
 ```
 
-## 🗭 默认消息详情页
+## 💬 默认消息详情页
 
 服务启动成功后会自带消息详情页界面(即消息模板跳转的页面)，访问地址 `http://127.0.0.1:5566/detail` ，如有公网地址，可设置base_url参数为对应的host即可(无需加/detail)。
 ![wx3.png](img/msg.png)
@@ -188,3 +197,9 @@ curl --location --request POST 'http://127.0.0.1:5566/wxsend' \
 ## 📜 许可证
 
 本项目采用 [MIT License](./LICENSE.txt) 开源许可证。
+
+## 📁 相关项目
+
+- [frankiejun/wxpush](https://github.com/frankiejun/wxpush) (特别感谢)
+- [wxpushSkin](https://github.com/frankiejun/wxpushSkin)
+- [gotify的微信消息服务](https://github.com/Wuqiyang312/gotify-wechat-plugin)
